@@ -78,12 +78,31 @@
     return pages[index];
   }
 
+  function isUndoRedoShortcut(e) {
+    const mod = e.metaKey || e.ctrlKey;
+    if (!mod) return false;
+    const key = e.key.toLowerCase();
+    return key === 'z' || key === 'y';
+  }
+
   function attachPageListeners(body) {
     body.addEventListener('input', () => {
       updateEmptyState(body);
       schedulePagination();
     });
     body.addEventListener('paste', handlePaste);
+    body.addEventListener('copy', handleCopyOrCut);
+    body.addEventListener('cut', handleCopyOrCut);
+    // The browser's native undo/redo isn't aware that repagination moves
+    // paragraphs between page bodies with plain DOM calls, not
+    // execCommand. Letting undo run against that can desync the
+    // browser's internal edit state from the DOM — the editor then
+    // stops responding to clicks until some other edit (e.g. a spelling
+    // fix) forces a repagination pass that happens to resync things.
+    // Blocking the shortcut here avoids that broken state entirely.
+    body.addEventListener('keydown', (e) => {
+      if (isUndoRedoShortcut(e)) e.preventDefault();
+    });
     body.addEventListener('focus', () => {
       activeBody = body;
     });
@@ -177,6 +196,23 @@
       try {
         sel.removeAllRanges();
         sel.addRange(savedRange);
+
+        // Repagination can reparent the paragraph the caret was in onto a
+        // different page's body div (see the push/pull passes above).
+        // Restoring the Range doesn't move browser focus with it, so
+        // without this, document.activeElement can stay pinned to the
+        // old page while the caret visually shows up on the new one —
+        // clicks/typing then land in the wrong place until something
+        // forces a fresh focus.
+        const landedNode = savedRange.startContainer;
+        const landedEl = landedNode.nodeType === 1 ? landedNode : landedNode.parentElement;
+        const landedPage = pages.find((p) => p.body.contains(landedEl));
+        if (landedPage && document.activeElement !== landedPage.body) {
+          landedPage.body.focus({ preventScroll: true });
+          sel.removeAllRanges();
+          sel.addRange(savedRange);
+          activeBody = landedPage.body;
+        }
       } catch (err) {
         // The saved anchor is no longer attached; leave selection as-is.
       }
@@ -368,28 +404,45 @@
     const range = currentRangeInMountain();
     if (!range || range.collapsed) return;
 
-    try { document.execCommand('removeFormat', false, null); } catch (err) { /* ignore */ }
-
-    const sel = window.getSelection();
-    if (!sel.rangeCount) return;
-    const range2 = sel.getRangeAt(0);
-    const container = range2.commonAncestorContainer.nodeType === 1
-      ? range2.commonAncestorContainer
-      : range2.commonAncestorContainer.parentElement;
+    const container = range.commonAncestorContainer.nodeType === 1
+      ? range.commonAncestorContainer
+      : range.commonAncestorContainer.parentElement;
     if (!container || !container.querySelectorAll) return;
 
-    // removeFormat alone is inconsistent across browsers for highlight
-    // colour and custom font-size spans, so unwrap anything left over.
-    // Links are deliberately left alone — clearing character formatting
-    // shouldn't also delete the hyperlink itself.
-    const leftovers = container.querySelectorAll('span[style], font, mark, b, strong, i, em, u, s, strike');
-    leftovers.forEach((el) => {
-      if (!range2.intersectsNode(el)) return;
+    // Decide what to touch *before* mutating anything or calling
+    // execCommand — some browsers collapse the selection once
+    // removeFormat runs, so searching for leftovers afterwards can miss
+    // most of what was actually selected. The still-live original range
+    // is the reliable thing to test intersection against.
+    //
+    // Inline tags get unwrapped (tag removed, contents kept). Any other
+    // element carrying a leftover inline style — including a pasted
+    // <p style="font-size:...">, <div style="color:...">, or <li> —
+    // just has that style attribute stripped, since paste sanitisation
+    // allows style on any allowed tag, not only spans. Links keep their
+    // tag (so the hyperlink itself survives) but lose custom styling too.
+    const toUnwrap = [];
+    const toStripStyle = [];
+
+    container.querySelectorAll('span[style], font, mark, b, strong, i, em, u, s, strike').forEach((el) => {
+      if (range.intersectsNode(el)) toUnwrap.push(el);
+    });
+    container.querySelectorAll('[style]').forEach((el) => {
+      if (toUnwrap.indexOf(el) === -1 && range.intersectsNode(el)) toStripStyle.push(el);
+    });
+
+    toUnwrap.forEach((el) => {
       const parent = el.parentNode;
       if (!parent) return;
       while (el.firstChild) parent.insertBefore(el.firstChild, el);
       parent.removeChild(el);
     });
+    toStripStyle.forEach((el) => el.removeAttribute('style'));
+
+    try { document.execCommand('removeFormat', false, null); } catch (err) { /* ignore */ }
+
+    container.normalize();
+    schedulePagination();
   }
 
   // ============================================================
@@ -567,6 +620,147 @@
       document.execCommand('insertText', false, text);
     }
     schedulePagination();
+  }
+
+  // ============================================================
+  // Copy — rewrite lists into Word-native markup (2.6)
+  //
+  // The browser copies contenteditable content by serialising the
+  // live DOM as-is, so a plain <ul><li> goes to the clipboard with no
+  // Word list metadata attached. Word still opens it, but since it
+  // doesn't recognise it as "a real list" it falls back to inserting
+  // a literal bullet character followed by a full default tab stop
+  // before the text — the "dot, big gap, then text/link" look.
+  // Giving Word its own mso-list / @list level definitions makes it
+  // treat the paste as a genuine bulleted/numbered list, the same as
+  // if the bullet button had been clicked inside Word itself.
+  // ============================================================
+
+  const WORD_BULLET_CHARS = ['\uf0b7', 'o', '\uf0a7'];       // Symbol, Courier New, Wingdings
+  const WORD_BULLET_FONTS = ['Symbol', 'Courier New', 'Wingdings'];
+
+  let wordListSeq = 0;
+
+  function wordListLevelDef(listNum, level, ordered) {
+    const indent = ((level + 1) * 0.25).toFixed(2) + 'in';
+    if (ordered) {
+      return '@list l' + listNum + ':level' + (level + 1) + '\n' +
+        '  {mso-level-number-format:decimal;\n' +
+        '  mso-level-text:%' + (level + 1) + '.;\n' +
+        '  mso-level-tab-stop:none;\n' +
+        '  mso-level-number-position:left;\n' +
+        '  margin-left:' + indent + ';\n' +
+        '  text-indent:-.25in;}';
+    }
+    const idx = level % WORD_BULLET_CHARS.length;
+    return '@list l' + listNum + ':level' + (level + 1) + '\n' +
+      '  {mso-level-number-format:bullet;\n' +
+      '  mso-level-text:' + WORD_BULLET_CHARS[idx] + ';\n' +
+      '  mso-level-tab-stop:none;\n' +
+      '  mso-level-number-position:left;\n' +
+      '  margin-left:' + indent + ';\n' +
+      '  text-indent:-.25in;\n' +
+      '  font-family:' + WORD_BULLET_FONTS[idx] + ';}';
+  }
+
+  // Flattens one <ul>/<ol> (recursing into nested lists) into a
+  // sequence of <p> elements carrying mso-list metadata, in the order
+  // Word itself stores list items (nested items become their own
+  // paragraphs at a deeper level, not actual nested elements).
+  function convertListToParagraphs(list, level, ctx) {
+    const ordered = list.tagName === 'OL';
+    const listNum = ++ctx.listId;
+    ctx.defs.push(
+      '@list l' + listNum + '\n' +
+      '  {mso-list-id:' + (100000 + listNum) + ';\n' +
+      '  mso-list-template-ids:' + (100000 + listNum) + ';}'
+    );
+    ctx.defs.push(wordListLevelDef(listNum, level, ordered));
+
+    const out = [];
+    let n = 0;
+    Array.from(list.children).forEach((li) => {
+      if (li.tagName !== 'LI') return;
+      n++;
+
+      const p = document.createElement('p');
+      p.setAttribute('style',
+        'margin:0 0 4pt;margin-left:' + ((level + 1) * 0.25).toFixed(2) + 'in;' +
+        'text-indent:-.25in;mso-list:l' + listNum + ' level' + (level + 1) + ' lfo' + listNum + ';'
+      );
+
+      const marker = document.createElement('span');
+      marker.setAttribute('style', 'mso-list:Ignore');
+      if (ordered) {
+        marker.appendChild(document.createTextNode(n + '.'));
+      } else {
+        const glyph = document.createElement('span');
+        glyph.setAttribute('style', "font-family:'" + WORD_BULLET_FONTS[level % WORD_BULLET_FONTS.length] + "'");
+        glyph.appendChild(document.createTextNode(WORD_BULLET_CHARS[level % WORD_BULLET_CHARS.length]));
+        marker.appendChild(glyph);
+      }
+      const spacer = document.createElement('span');
+      spacer.setAttribute('style', "font:7.0pt 'Times New Roman'");
+      spacer.innerHTML = '&nbsp;&nbsp;&nbsp;&nbsp;';
+      marker.appendChild(spacer);
+      p.appendChild(marker);
+
+      Array.from(li.childNodes).forEach((child) => {
+        if (child.nodeType === 1 && (child.tagName === 'UL' || child.tagName === 'OL')) return;
+        p.appendChild(child.cloneNode(true));
+      });
+      out.push(p);
+
+      Array.from(li.children).forEach((child) => {
+        if (child.tagName === 'UL' || child.tagName === 'OL') {
+          out.push.apply(out, convertListToParagraphs(child, level + 1, ctx));
+        }
+      });
+    });
+
+    return out;
+  }
+
+  // Rewrites every top-level list inside `wrapper` in place, returns
+  // the collected @list style definitions to embed in the clipboard.
+  function buildWordListStyles(wrapper) {
+    const ctx = { listId: wordListSeq, defs: [] };
+    Array.from(wrapper.querySelectorAll('ul, ol')).forEach((list) => {
+      if (list.closest('li')) return; // nested — handled by the recursion above
+      const paragraphs = convertListToParagraphs(list, 0, ctx);
+      const frag = document.createDocumentFragment();
+      paragraphs.forEach((p) => frag.appendChild(p));
+      list.parentNode.replaceChild(frag, list);
+    });
+    wordListSeq = ctx.listId;
+    return ctx.defs;
+  }
+
+  function handleCopyOrCut(e) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || sel.isCollapsed) return;
+    const range = sel.getRangeAt(0);
+    if (!inMountain(range.commonAncestorContainer)) return;
+
+    const frag = range.cloneContents();
+    if (!frag.querySelector('ul, ol')) return; // no list involved — default copy is already fine
+
+    const wrapper = document.createElement('div');
+    wrapper.appendChild(frag);
+    const listDefs = buildWordListStyles(wrapper);
+
+    const html =
+      '<html xmlns:o="urn:schemas-microsoft-com:office:office" ' +
+      'xmlns:w="urn:schemas-microsoft-com:office:word" ' +
+      'xmlns="http://www.w3.org/TR/REC-html40">' +
+      '<head><style>\n' + listDefs.join('\n') + '\n</style></head>' +
+      '<body><!--StartFragment-->' + wrapper.innerHTML + '<!--EndFragment--></body></html>';
+
+    e.clipboardData.setData('text/html', html);
+    e.clipboardData.setData('text/plain', wrapper.textContent);
+    e.preventDefault();
+
+    if (e.type === 'cut') document.execCommand('delete', false, null);
   }
 
   // ============================================================
