@@ -38,6 +38,24 @@
   padding: 0;
 }
 
+.peaks-swatch__glyph--text {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 600;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent !important;
+  border: none;
+}
+
+.peaks-toolbar [data-peaks-halign].is-active,
+.peaks-toolbar [data-peaks-valign].is-active,
+.peaks-toolbar [aria-pressed="true"] {
+  background: var(--bronze-soft);
+  color: var(--bronze-deep);
+}
+
 .peaks-cellref {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 12px;
@@ -101,7 +119,13 @@ th.peaks-colhead {
   z-index: 3;
   height: 26px;
   padding: 0 4px;
+}
+
+.peaks-colhead__label {
+  display: block;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 th.peaks-rowhead {
@@ -120,8 +144,8 @@ th.peaks-rowhead {
 .peaks-colhead__resize {
   position: absolute;
   top: 0;
-  right: -3px;
-  width: 6px;
+  right: 0;
+  width: 7px;
   height: 100%;
   cursor: col-resize;
   z-index: 5;
@@ -130,9 +154,9 @@ th.peaks-rowhead {
 .peaks-rowhead__resize {
   position: absolute;
   left: 0;
-  bottom: -3px;
+  bottom: 0;
   width: 100%;
-  height: 6px;
+  height: 7px;
   cursor: row-resize;
   z-index: 5;
 }
@@ -170,4 +194,19 @@ td.peaks-cell--editing {
   cursor: text;
   z-index: 1;
   position: relative;
+}
+
+td.peaks-cell--wrap:not(.peaks-cell--editing) {
+  white-space: normal;
+  word-break: break-word;
+  text-overflow: clip;
+}
+
+td.peaks-cell--link {
+  color: var(--bronze-deep, #7a4a24);
+  text-decoration: underline;
+}
+
+td.peaks-cell--merge-master {
+  box-shadow: inset 0 0 0 1px var(--gray-line);
 }
