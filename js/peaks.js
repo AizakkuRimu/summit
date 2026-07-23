@@ -50,6 +50,7 @@
 
   let selection = null;   // { r1, c1, r2, c2 }
   let anchor = null;      // { r, c } — where the current drag/selection began
+  let primaryCell = null; // { r, c } — the cell currently showing the primary ring
   let isSelecting = false;
   let editingCell = null; // { r, c, td, previousValue }
   let colResize = null;   // { c, startX, startWidth }
@@ -98,7 +99,10 @@
       th.className = 'peaks-colhead';
       th.scope = 'col';
       th.dataset.col = c;
-      th.textContent = colLabel(c);
+      const label = document.createElement('span');
+      label.className = 'peaks-colhead__label';
+      label.textContent = colLabel(c);
+      th.appendChild(label);
       const handle = document.createElement('div');
       handle.className = 'peaks-colhead__resize';
       th.appendChild(handle);
@@ -169,17 +173,22 @@
   }
 
   function setSelection(r1, c1, r2, c2) {
-    if (selection) {
-      paintSelection(selection, false);
-      if (anchor) cellsEl[anchor.r][anchor.c].classList.remove('peaks-cell--primary');
-    }
+    if (selection) paintSelection(selection, false);
+    if (primaryCell) cellsEl[primaryCell.r][primaryCell.c].classList.remove('peaks-cell--primary');
+
     selection = {
       r1: Math.min(r1, r2), r2: Math.max(r1, r2),
       c1: Math.min(c1, c2), c2: Math.max(c1, c2)
     };
     paintSelection(selection, true);
+    primaryCell = { r: r1, c: c1 };
     cellsEl[r1][c1].classList.add('peaks-cell--primary');
     updateCellRef();
+    syncToolbarState();
+  }
+
+  function primaryTd() {
+    return primaryCell ? cellsEl[primaryCell.r][primaryCell.c] : null;
   }
 
   function updateCellRef() {
@@ -251,6 +260,11 @@
 
     const td = e.target.closest('td.peaks-cell');
     if (td) {
+      if ((e.ctrlKey || e.metaKey) && td.dataset.href) {
+        e.preventDefault();
+        window.open(td.dataset.href, '_blank', 'noopener');
+        return;
+      }
       if (editingCell && editingCell.td !== td) commitEdit();
       const r = +td.dataset.row, c = +td.dataset.col;
       e.preventDefault();
@@ -354,7 +368,10 @@
 
   grid.addEventListener('keydown', (e) => {
     if (editingCell) {
-      if (e.key === 'Enter') {
+      if (e.key === 'Enter' && e.shiftKey) {
+        e.preventDefault();
+        document.execCommand('insertText', false, '\n');
+      } else if (e.key === 'Enter') {
         e.preventDefault();
         commitEdit();
         moveSelection(1, 0);
@@ -446,6 +463,321 @@
   });
 
   // ============================================================
+  // Text formatting (bold/italic/underline/strike, size, colour,
+  // case, alignment, wrap, merge, lists, links, clear-format)
+  // ============================================================
+
+  const DEFAULT_FONT_SIZE = 12.5; // matches .peaks-grid base font-size in peaks.css
+  const mergedMasters = new Set(); // "r,c" keys of cells currently acting as a merge master
+
+  const boldBtn = document.getElementById('peaks-bold');
+  const italicBtn = document.getElementById('peaks-italic');
+  const underlineBtn = document.getElementById('peaks-underline');
+  const strikeBtn = document.getElementById('peaks-strike');
+  const forecolorInput = document.getElementById('peaks-forecolor');
+  const forecolorGlyph = document.getElementById('peaks-forecolor-glyph');
+  const fontSizeInput = document.getElementById('peaks-fontsize-input');
+  const wrapBtn = document.getElementById('peaks-wrap');
+  const mergeBtn = document.getElementById('peaks-merge');
+
+  function setPressed(btn, val) {
+    if (btn) btn.setAttribute('aria-pressed', val ? 'true' : 'false');
+  }
+
+  function rgbToHex(rgb) {
+    if (!rgb) return null;
+    if (rgb.startsWith('#')) return rgb;
+    const m = rgb.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (!m) return null;
+    const toHex = (n) => Number(n).toString(16).padStart(2, '0');
+    return '#' + toHex(m[1]) + toHex(m[2]) + toHex(m[3]);
+  }
+
+  function currentDecorations(td) {
+    const deco = td.style.textDecorationLine || '';
+    return deco.split(' ').filter(Boolean);
+  }
+
+  function getFontSizePx(td) {
+    return td.style.fontSize ? parseFloat(td.style.fontSize) : DEFAULT_FONT_SIZE;
+  }
+
+  function toggleCellStyle(prop, onValue) {
+    const p = primaryTd();
+    if (!p) return;
+    const turnOn = p.style[prop] !== onValue;
+    forEachSelectedCell((td) => { td.style[prop] = turnOn ? onValue : ''; });
+    syncToolbarState();
+  }
+
+  function toggleDecoration(kind) {
+    const p = primaryTd();
+    if (!p) return;
+    const has = currentDecorations(p).includes(kind);
+    forEachSelectedCell((td) => {
+      const decos = currentDecorations(td).filter((d) => d !== kind);
+      if (!has) decos.push(kind);
+      td.style.textDecorationLine = decos.join(' ');
+    });
+    syncToolbarState();
+  }
+
+  function setFontSize(px) {
+    px = Math.max(6, Math.min(96, Math.round(px)));
+    forEachSelectedCell((td) => { td.style.fontSize = px + 'px'; });
+    syncToolbarState();
+  }
+
+  function bumpFontSize(delta) {
+    const p = primaryTd();
+    if (!p) return;
+    setFontSize(getFontSizePx(p) + delta);
+  }
+
+  function transformCase(fn) {
+    if (editingCell) commitEdit();
+    forEachSelectedCell((td) => { td.textContent = fn(td.textContent); });
+  }
+
+  function setHAlign(value) {
+    forEachSelectedCell((td) => { td.style.textAlign = value; });
+    syncToolbarState();
+  }
+
+  function setVAlign(value) {
+    forEachSelectedCell((td) => { td.style.verticalAlign = value; });
+    syncToolbarState();
+  }
+
+  function toggleWrap() {
+    const p = primaryTd();
+    if (!p) return;
+    const turnOn = !p.classList.contains('peaks-cell--wrap');
+    forEachSelectedCell((td, r) => {
+      td.classList.toggle('peaks-cell--wrap', turnOn);
+      if (turnOn && rowHeights[r] <= DEFAULT_ROW_HEIGHT) {
+        rowHeights[r] = 48;
+        tbody.children[r].style.height = '48px';
+      }
+    });
+    syncToolbarState();
+  }
+
+  function toggleList(kind) {
+    if (editingCell) commitEdit();
+    const bulletRe = /^•\s/;
+    const numberRe = /^\d+\.\s/;
+    forEachSelectedCell((td) => {
+      const lines = td.textContent.split('\n');
+      const stripped = lines.map((line) => line.replace(bulletRe, '').replace(numberRe, ''));
+      const alreadyThisKind = lines.some((l) => l.trim()) &&
+        lines.every((line) => !line.trim() || (kind === 'bullet' ? bulletRe.test(line) : numberRe.test(line)));
+      if (alreadyThisKind) {
+        td.textContent = stripped.join('\n');
+      } else {
+        let n = 0;
+        td.textContent = stripped.map((line) => {
+          if (!line.trim()) return line;
+          n++;
+          return (kind === 'bullet' ? '• ' : n + '. ') + line;
+        }).join('\n');
+        td.classList.add('peaks-cell--wrap');
+      }
+    });
+    syncToolbarState();
+  }
+
+  function insertLink() {
+    const p = primaryTd();
+    if (!p) return;
+    const existing = p.dataset.href || 'https://';
+    const url = window.prompt('Enter URL for the selected cell(s):', existing);
+    if (!url) return;
+    forEachSelectedCell((td) => {
+      td.dataset.href = url;
+      td.classList.add('peaks-cell--link');
+    });
+    syncToolbarState();
+  }
+
+  function removeLink() {
+    forEachSelectedCell((td) => {
+      delete td.dataset.href;
+      td.classList.remove('peaks-cell--link');
+    });
+    syncToolbarState();
+  }
+
+  function clearFormatting() {
+    forEachSelectedCell((td) => {
+      td.style.cssText = '';
+      td.classList.remove('peaks-cell--wrap', 'peaks-cell--link');
+      delete td.dataset.href;
+    });
+    syncToolbarState();
+  }
+
+  // ---------- Merge & centre ----------
+
+  function rectOverlap(a, b) {
+    return a.r1 <= b.r2 && a.r2 >= b.r1 && a.c1 <= b.c2 && a.c2 >= b.c1;
+  }
+
+  function unmergeCell(r, c) {
+    const td = cellsEl[r][c];
+    const rowSpan = td.rowSpan || 1;
+    const colSpan = td.colSpan || 1;
+    if (rowSpan === 1 && colSpan === 1) return;
+    for (let rr = r; rr < r + rowSpan; rr++) {
+      for (let cc = c; cc < c + colSpan; cc++) {
+        if (rr === r && cc === c) continue;
+        const slave = cellsEl[rr][cc];
+        slave.style.display = '';
+        slave.classList.remove('peaks-cell--merge-slave');
+      }
+    }
+    td.rowSpan = 1;
+    td.colSpan = 1;
+    td.classList.remove('peaks-cell--merge-master');
+    mergedMasters.delete(r + ',' + c);
+  }
+
+  function unmergeOverlapping(target) {
+    Array.from(mergedMasters).forEach((key) => {
+      const [r, c] = key.split(',').map(Number);
+      const td = cellsEl[r][c];
+      const region = { r1: r, c1: c, r2: r + (td.rowSpan || 1) - 1, c2: c + (td.colSpan || 1) - 1 };
+      if (rectOverlap(region, target)) unmergeCell(r, c);
+    });
+  }
+
+  function mergeCenter() {
+    if (!selection) return;
+    const sel = selection;
+
+    const topLeft = cellsEl[sel.r1][sel.c1];
+    const alreadyThisMerge = mergedMasters.has(sel.r1 + ',' + sel.c1) &&
+      (topLeft.rowSpan || 1) === (sel.r2 - sel.r1 + 1) &&
+      (topLeft.colSpan || 1) === (sel.c2 - sel.c1 + 1);
+
+    if (alreadyThisMerge) {
+      unmergeCell(sel.r1, sel.c1);
+      syncToolbarState();
+      return;
+    }
+
+    if (sel.r1 === sel.r2 && sel.c1 === sel.c2) {
+      setHAlign('center');
+      setVAlign('middle');
+      return;
+    }
+
+    if (editingCell) commitEdit();
+    unmergeOverlapping({ r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 });
+
+    const master = cellsEl[sel.r1][sel.c1];
+    for (let r = sel.r1; r <= sel.r2; r++) {
+      for (let c = sel.c1; c <= sel.c2; c++) {
+        if (r === sel.r1 && c === sel.c1) continue;
+        const slave = cellsEl[r][c];
+        slave.textContent = '';
+        slave.style.display = 'none';
+        slave.classList.add('peaks-cell--merge-slave');
+      }
+    }
+    master.rowSpan = sel.r2 - sel.r1 + 1;
+    master.colSpan = sel.c2 - sel.c1 + 1;
+    master.classList.add('peaks-cell--merge-master');
+    master.style.textAlign = 'center';
+    master.style.verticalAlign = 'middle';
+    mergedMasters.add(sel.r1 + ',' + sel.c1);
+    syncToolbarState();
+  }
+
+  // ---------- Toolbar state sync ----------
+
+  function syncToolbarState() {
+    const p = primaryTd();
+    if (!p) return;
+
+    setPressed(boldBtn, p.style.fontWeight === 'bold');
+    setPressed(italicBtn, p.style.fontStyle === 'italic');
+    const decos = currentDecorations(p);
+    setPressed(underlineBtn, decos.includes('underline'));
+    setPressed(strikeBtn, decos.includes('line-through'));
+
+    if (fontSizeInput) fontSizeInput.value = Math.round(getFontSizePx(p));
+
+    const hex = rgbToHex(p.style.color);
+    if (hex && forecolorInput) { forecolorInput.value = hex; }
+    if (forecolorGlyph) forecolorGlyph.style.color = hex || forecolorInput.value;
+
+    const hAlign = p.style.textAlign || 'left';
+    document.querySelectorAll('[data-peaks-halign]').forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.peaksHalign === hAlign);
+    });
+    const vAlign = p.style.verticalAlign || 'middle';
+    document.querySelectorAll('[data-peaks-valign]').forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.peaksValign === vAlign);
+    });
+
+    setPressed(wrapBtn, p.classList.contains('peaks-cell--wrap'));
+    setPressed(mergeBtn, primaryCell ? mergedMasters.has(primaryCell.r + ',' + primaryCell.c) : false);
+  }
+
+  // ---------- Wire up buttons ----------
+
+  if (boldBtn) boldBtn.addEventListener('click', () => toggleCellStyle('fontWeight', 'bold'));
+  if (italicBtn) italicBtn.addEventListener('click', () => toggleCellStyle('fontStyle', 'italic'));
+  if (underlineBtn) underlineBtn.addEventListener('click', () => toggleDecoration('underline'));
+  if (strikeBtn) strikeBtn.addEventListener('click', () => toggleDecoration('line-through'));
+
+  if (forecolorInput) {
+    forecolorInput.addEventListener('input', () => {
+      if (forecolorGlyph) forecolorGlyph.style.color = forecolorInput.value;
+      forEachSelectedCell((td) => { td.style.color = forecolorInput.value; });
+    });
+  }
+
+  const fsDecrease = document.getElementById('peaks-fontsize-decrease');
+  const fsIncrease = document.getElementById('peaks-fontsize-increase');
+  if (fsDecrease) fsDecrease.addEventListener('click', () => bumpFontSize(-1));
+  if (fsIncrease) fsIncrease.addEventListener('click', () => bumpFontSize(1));
+  if (fontSizeInput) {
+    fontSizeInput.addEventListener('change', () => {
+      const v = parseFloat(fontSizeInput.value);
+      if (!isNaN(v)) setFontSize(v);
+    });
+  }
+
+  const upperBtn = document.getElementById('peaks-uppercase');
+  const lowerBtn = document.getElementById('peaks-lowercase');
+  if (upperBtn) upperBtn.addEventListener('click', () => transformCase((s) => s.toUpperCase()));
+  if (lowerBtn) lowerBtn.addEventListener('click', () => transformCase((s) => s.toLowerCase()));
+
+  document.querySelectorAll('[data-peaks-halign]').forEach((btn) => {
+    btn.addEventListener('click', () => setHAlign(btn.dataset.peaksHalign));
+  });
+  document.querySelectorAll('[data-peaks-valign]').forEach((btn) => {
+    btn.addEventListener('click', () => setVAlign(btn.dataset.peaksValign));
+  });
+
+  if (wrapBtn) wrapBtn.addEventListener('click', toggleWrap);
+  if (mergeBtn) mergeBtn.addEventListener('click', mergeCenter);
+
+  document.querySelectorAll('[data-peaks-list]').forEach((btn) => {
+    btn.addEventListener('click', () => toggleList(btn.dataset.peaksList));
+  });
+
+  const linkInsertBtn = document.getElementById('peaks-link-insert');
+  const linkRemoveBtn = document.getElementById('peaks-link-remove');
+  if (linkInsertBtn) linkInsertBtn.addEventListener('click', insertLink);
+  if (linkRemoveBtn) linkRemoveBtn.addEventListener('click', removeLink);
+
+  const clearFormatBtn = document.getElementById('peaks-clear-format');
+  if (clearFormatBtn) clearFormatBtn.addEventListener('click', clearFormatting);
+
+  // ============================================================
   // Init
   // ============================================================
 
@@ -455,7 +787,9 @@
   addRows(ROWS_INITIAL);
   anchor = { r: 0, c: 0 };
   selection = { r1: 0, c1: 0, r2: 0, c2: 0 };
+  primaryCell = { r: 0, c: 0 };
   paintSelection(selection, true);
   cellsEl[0][0].classList.add('peaks-cell--primary');
   updateCellRef();
+  syncToolbarState();
 })();
