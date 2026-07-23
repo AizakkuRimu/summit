@@ -45,9 +45,9 @@ svg {
 /* ---------- App shell layout ---------- */
 
 .summit-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  gap: 32px;
   height: 60px;
   padding: 0 20px;
   position: sticky;
@@ -59,7 +59,7 @@ svg {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex: 0 0 auto;
+  justify-self: start;
 }
 
 .summit-mark {
@@ -78,9 +78,8 @@ svg {
 .summit-tabs {
   display: flex;
   gap: 4px;
-  flex: 1 1 auto;
-  height: 100%;
-  align-items: flex-end;
+  align-items: center;
+  justify-self: center;
 }
 
 .summit-tab {
@@ -106,12 +105,7 @@ svg {
   transition: border-bottom-color 160ms ease;
 }
 
-.summit-tab[aria-selected="true"] {
-  transform: translateY(-2px);
-}
-
 .summit-theme-toggle {
-  flex: 0 0 auto;
   width: 34px;
   height: 34px;
   border-radius: 999px;
@@ -120,6 +114,7 @@ svg {
   align-items: center;
   justify-content: center;
   position: relative;
+  justify-self: end;
 }
 
 .summit-theme-toggle svg {
