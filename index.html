@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="css/base.css">
 <link rel="stylesheet" href="css/theme.css">
 <link rel="stylesheet" href="css/mountain.css">
+<link rel="stylesheet" href="css/peaks.css">
 </head>
 <body>
 
@@ -142,9 +143,70 @@
     </section>
 
     <section class="summit-panel" id="panel-peaks" role="tabpanel" aria-labelledby="tab-peaks" hidden>
-      <div class="summit-placeholder">
-        <p class="summit-placeholder__eyebrow">Section 3</p>
-        <p class="summit-placeholder__label">Peaks — spreadsheet editor not yet built</p>
+      <div class="peaks" id="peaks">
+
+        <div class="summit-toolbar peaks-toolbar" role="toolbar" aria-label="Peaks formatting toolbar">
+
+          <div class="summit-toolbar__group" data-group="fill">
+            <label class="summit-btn peaks-swatch" title="Cell fill colour">
+              <span class="peaks-swatch__glyph" id="peaks-fill-glyph" style="background:#E8D9C4"></span>
+              <input type="color" id="peaks-fill-color" value="#E8D9C4" aria-label="Cell fill colour">
+            </label>
+            <button type="button" class="summit-btn" id="peaks-fill-clear" aria-label="Clear fill colour" title="Clear fill colour">
+              <svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="1.5" fill="none"/><line x1="3" y1="17" x2="17" y2="3"/></svg>
+            </button>
+          </div>
+
+          <div class="summit-toolbar__divider"></div>
+
+          <div class="summit-toolbar__group" data-group="borders">
+            <button type="button" class="summit-btn" data-border-edge="all" aria-label="All borders" title="All borders">
+              <svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" fill="none"/><line x1="3" y1="10" x2="17" y2="10"/><line x1="10" y1="3" x2="10" y2="17"/></svg>
+            </button>
+            <button type="button" class="summit-btn" data-border-edge="outside" aria-label="Outside border" title="Outside border">
+              <svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" fill="none" stroke-width="2"/></svg>
+            </button>
+            <button type="button" class="summit-btn" data-border-edge="top" aria-label="Top border" title="Top border">
+              <svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" fill="none" stroke-opacity="0.35"/><line x1="3" y1="3" x2="17" y2="3" stroke-width="2.4"/></svg>
+            </button>
+            <button type="button" class="summit-btn" data-border-edge="bottom" aria-label="Bottom border" title="Bottom border">
+              <svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" fill="none" stroke-opacity="0.35"/><line x1="3" y1="17" x2="17" y2="17" stroke-width="2.4"/></svg>
+            </button>
+            <button type="button" class="summit-btn" data-border-edge="left" aria-label="Left border" title="Left border">
+              <svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" fill="none" stroke-opacity="0.35"/><line x1="3" y1="3" x2="3" y2="17" stroke-width="2.4"/></svg>
+            </button>
+            <button type="button" class="summit-btn" data-border-edge="right" aria-label="Right border" title="Right border">
+              <svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" fill="none" stroke-opacity="0.35"/><line x1="17" y1="3" x2="17" y2="17" stroke-width="2.4"/></svg>
+            </button>
+            <button type="button" class="summit-btn" data-border-edge="none" aria-label="No border" title="No border">
+              <svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" fill="none" stroke-opacity="0.35"/><line x1="3" y1="17" x2="17" y2="3"/></svg>
+            </button>
+            <select id="peaks-border-style" class="summit-select" aria-label="Border style">
+              <option value="thin">Thin</option>
+              <option value="thick">Thick</option>
+              <option value="dashed">Dashed</option>
+            </select>
+          </div>
+
+          <div class="summit-toolbar__spacer"></div>
+
+          <div class="summit-toolbar__group" data-group="ref">
+            <span class="peaks-cellref" id="peaks-cellref">A1</span>
+          </div>
+        </div>
+
+        <div class="peaks-scroll" id="peaks-scroll">
+          <table class="peaks-grid" id="peaks-grid">
+            <colgroup id="peaks-colgroup"></colgroup>
+            <thead>
+              <tr id="peaks-header-row">
+                <th class="peaks-corner" id="peaks-corner" scope="col" aria-label="Select all"></th>
+              </tr>
+            </thead>
+            <tbody id="peaks-body"></tbody>
+          </table>
+        </div>
+
       </div>
     </section>
 
@@ -158,5 +220,6 @@
 
   <script src="js/app.js"></script>
   <script src="js/mountain.js"></script>
+  <script src="js/peaks.js"></script>
 </body>
 </html>
