@@ -118,7 +118,7 @@
 }
 
 .mountain-page__body p {
-  margin: 0 0 6px;
+  margin: 0 0 2px;
 }
 
 .mountain-page__body p:last-child {
@@ -127,7 +127,7 @@
 
 .mountain-page__body ul,
 .mountain-page__body ol {
-  margin: 0 0 6px;
+  margin: 0 0 2px;
   padding-left: 28px;
 }
 
