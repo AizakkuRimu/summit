@@ -29,6 +29,7 @@
 
   const linkPopover = document.getElementById('mountain-link-popover');
   const linkInput = document.getElementById('mountain-link-input');
+  const fontSizeInput = document.getElementById('mountain-fontsize-input');
 
   const PLACEHOLDER = 'Start typing your document…';
   const MAX_REPAGINATION_PASSES = 40;
@@ -294,7 +295,10 @@
 
   document.addEventListener('selectionchange', () => {
     const sel = window.getSelection();
-    if (sel && sel.rangeCount && inMountain(sel.anchorNode)) updateToolbarState();
+    if (sel && sel.rangeCount && inMountain(sel.anchorNode)) {
+      updateToolbarState();
+      updateFontSizeDisplay();
+    }
   });
 
   // ============================================================
@@ -343,17 +347,10 @@
   // Font size (2.2)
   // ============================================================
 
-  function adjustFontSize(delta) {
-    const range = currentRangeInMountain();
-    if (!range || range.collapsed) return;
-
-    const refEl = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
-    const currentSize = parseFloat(getComputedStyle(refEl).fontSize) || 15;
-    const newSize = Math.max(8, Math.min(96, Math.round(currentSize + delta)));
-
+  function wrapRangeInFontSize(range, sizePx) {
     const frag = range.extractContents();
     const span = document.createElement('span');
-    span.style.fontSize = newSize + 'px';
+    span.style.fontSize = sizePx + 'px';
     span.appendChild(frag);
     range.insertNode(span);
 
@@ -362,7 +359,87 @@
     newRange.selectNodeContents(span);
     sel.removeAllRanges();
     sel.addRange(newRange);
+    return span;
   }
+
+  function adjustFontSize(delta) {
+    const range = currentRangeInMountain();
+    if (!range || range.collapsed) return;
+
+    const refEl = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+    const currentSize = parseFloat(getComputedStyle(refEl).fontSize) || 15;
+    const newSize = Math.max(8, Math.min(96, Math.round(currentSize + delta)));
+
+    wrapRangeInFontSize(range, newSize);
+    updateFontSizeDisplay();
+  }
+
+  // Returns the selection's font size in px, or null if the selection
+  // spans more than one size (so the toolbar box can show blank, the
+  // same way Word's font-size box goes blank over a mixed selection).
+  function computeSelectionFontSize(range) {
+    if (range.collapsed) {
+      const el = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+      const size = el ? parseFloat(getComputedStyle(el).fontSize) : NaN;
+      return isNaN(size) ? null : Math.round(size);
+    }
+
+    const root = range.commonAncestorContainer.nodeType === 1
+      ? range.commonAncestorContainer
+      : range.commonAncestorContainer.parentNode;
+    if (!root) return null;
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let size = null;
+    let node = walker.nextNode();
+    while (node) {
+      if (range.intersectsNode(node) && node.data.trim() !== '') {
+        const el = node.parentElement;
+        const s = el ? Math.round(parseFloat(getComputedStyle(el).fontSize)) : NaN;
+        if (!isNaN(s)) {
+          if (size === null) size = s;
+          else if (size !== s) return null; // mixed
+        }
+      }
+      node = walker.nextNode();
+    }
+    return size;
+  }
+
+  function updateFontSizeDisplay() {
+    const range = currentRangeInMountain();
+    const size = range ? computeSelectionFontSize(range) : null;
+    fontSizeInput.value = size == null ? '' : String(size);
+  }
+
+  let savedFontSizeRange = null;
+
+  fontSizeInput.addEventListener('mousedown', () => {
+    const sel = window.getSelection();
+    savedFontSizeRange = (sel && sel.rangeCount && inMountain(sel.anchorNode)) ? sel.getRangeAt(0).cloneRange() : null;
+  });
+
+  function commitFontSizeInput() {
+    const raw = parseFloat(fontSizeInput.value);
+    if (isNaN(raw)) return;
+    if (!savedFontSizeRange || !inMountain(savedFontSizeRange.commonAncestorContainer) || savedFontSizeRange.collapsed) return;
+
+    const size = Math.max(8, Math.min(96, Math.round(raw)));
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(savedFontSizeRange);
+
+    wrapRangeInFontSize(savedFontSizeRange, size);
+    schedulePagination();
+    updateFontSizeDisplay();
+    fontSizeInput.blur();
+  }
+
+  fontSizeInput.addEventListener('change', commitFontSizeInput);
+  fontSizeInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commitFontSizeInput(); }
+    if (e.key === 'Escape') { e.preventDefault(); updateFontSizeDisplay(); fontSizeInput.blur(); }
+  });
 
   // ============================================================
   // UPPERCASE / lowercase (2.2) — rewrites text node data only,
@@ -421,15 +498,24 @@
     // just has that style attribute stripped, since paste sanitisation
     // allows style on any allowed tag, not only spans. Links keep their
     // tag (so the hyperlink itself survives) but lose custom styling too.
+    const UNWRAP_SELECTOR = 'span[style], font, mark, b, strong, i, em, u, s, strike';
     const toUnwrap = [];
     const toStripStyle = [];
 
-    container.querySelectorAll('span[style], font, mark, b, strong, i, em, u, s, strike').forEach((el) => {
-      if (range.intersectsNode(el)) toUnwrap.push(el);
-    });
-    container.querySelectorAll('[style]').forEach((el) => {
-      if (toUnwrap.indexOf(el) === -1 && range.intersectsNode(el)) toStripStyle.push(el);
-    });
+    function consider(el) {
+      if (!el || el.nodeType !== 1 || !range.intersectsNode(el)) return;
+      if (el.matches(UNWRAP_SELECTOR)) {
+        if (toUnwrap.indexOf(el) === -1) toUnwrap.push(el);
+      } else if (el.hasAttribute('style') && toStripStyle.indexOf(el) === -1) {
+        toStripStyle.push(el);
+      }
+    }
+
+    // querySelectorAll only returns descendants — container itself can
+    // legitimately BE the formatted element (e.g. the selection exactly
+    // covers one <span style="font-size:...">), so it must be checked too.
+    consider(container);
+    container.querySelectorAll('*').forEach(consider);
 
     toUnwrap.forEach((el) => {
       const parent = el.parentNode;
@@ -497,6 +583,7 @@
 
     if (editingLinkEl) {
       editingLinkEl.setAttribute('href', url);
+      editingLinkEl.setAttribute('title', url);
     } else {
       document.execCommand('createLink', false, url);
       const sel2 = window.getSelection();
@@ -505,6 +592,7 @@
         if (link) {
           link.setAttribute('target', '_blank');
           link.setAttribute('rel', 'noopener noreferrer');
+          link.setAttribute('title', url);
         }
       }
     }
@@ -601,6 +689,7 @@
         } else {
           child.setAttribute('target', '_blank');
           child.setAttribute('rel', 'noopener noreferrer');
+          child.setAttribute('title', href);
         }
       }
 
@@ -736,6 +825,16 @@
     return ctx.defs;
   }
 
+  // Reads the paragraph spacing straight from the live page CSS, so if
+  // that value changes later this stays in sync automatically instead of
+  // silently drifting from a hardcoded copy of the number.
+  function currentParagraphMarginCss() {
+    const sample = pagesContainer.querySelector('.mountain-page__body p');
+    if (!sample) return '0 0 2px 0';
+    const cs = getComputedStyle(sample);
+    return [cs.marginTop, cs.marginRight, cs.marginBottom, cs.marginLeft].join(' ');
+  }
+
   function handleCopyOrCut(e) {
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount || sel.isCollapsed) return;
@@ -743,11 +842,21 @@
     if (!inMountain(range.commonAncestorContainer)) return;
 
     const frag = range.cloneContents();
-    if (!frag.querySelector('ul, ol')) return; // no list involved — default copy is already fine
-
     const wrapper = document.createElement('div');
     wrapper.appendChild(frag);
-    const listDefs = buildWordListStyles(wrapper);
+
+    const hasList = !!wrapper.querySelector('ul, ol');
+    const listDefs = hasList ? buildWordListStyles(wrapper) : [];
+
+    // Our tight paragraph spacing only exists because of this app's own
+    // stylesheet, which doesn't travel with a copy — pasted elsewhere,
+    // <p> falls back to the destination's own (usually much larger)
+    // default margin, which reads as a doubled gap between every line.
+    // Inlining the real margin here keeps the same spacing everywhere.
+    const paragraphMargin = currentParagraphMarginCss();
+    wrapper.querySelectorAll('p').forEach((p) => {
+      if (!p.getAttribute('style')) p.style.margin = paragraphMargin;
+    });
 
     const html =
       '<html xmlns:o="urn:schemas-microsoft-com:office:office" ' +
