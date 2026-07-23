@@ -75,3 +75,49 @@ body {
 .summit-placeholder__label {
   color: var(--gray);
 }
+
+/* ---------- Shared toolbar & button primitives ---------- */
+
+.summit-toolbar {
+  background: var(--stone-raised);
+  border-bottom: 1px solid var(--gray-line);
+}
+
+.summit-toolbar__divider {
+  background: var(--gray-line);
+}
+
+.summit-btn {
+  color: var(--gray);
+}
+
+.summit-btn:hover:not(:disabled) {
+  background: var(--bronze-soft);
+  color: var(--ink);
+}
+
+.summit-btn[aria-pressed="true"] {
+  background: var(--bronze-soft);
+  color: var(--bronze-deep);
+  border-color: var(--bronze);
+}
+
+.summit-btn--primary {
+  background: var(--bronze);
+  color: var(--stone-raised);
+}
+
+.summit-btn--primary:hover:not(:disabled) {
+  background: var(--bronze-deep);
+  color: var(--stone-raised);
+}
+
+.summit-select {
+  background: var(--stone);
+  color: var(--ink);
+  border-color: var(--gray-line);
+}
+
+.summit-select:hover {
+  border-color: var(--bronze);
+}

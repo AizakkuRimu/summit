@@ -1,0 +1,189 @@
+/* ---------------------------------------------------------
+   Summit — mountain.css
+   Section 2: Mountain tab (Word-style editor).
+   Layout, paginated page canvas, colour swatches, link popover.
+   Colour values come from theme.css tokens throughout.
+--------------------------------------------------------- */
+
+.mountain {
+  --page-w: 816px;   /* US Letter, 8.5in @ 96dpi */
+  --page-h: 1056px;  /* US Letter, 11in @ 96dpi */
+  --page-margin: 96px; /* 1in */
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.mountain[data-page-size="a4"] {
+  --page-w: 794px;   /* 210mm @ 96dpi */
+  --page-h: 1123px;  /* 297mm @ 96dpi */
+}
+
+/* ---------- Toolbar specifics ---------- */
+
+.mountain-toolbar .summit-btn--glyph b,
+.mountain-toolbar .summit-btn--glyph i,
+.mountain-toolbar .summit-btn--glyph u,
+.mountain-toolbar .summit-btn--glyph s {
+  font-style: normal;
+  text-decoration: none;
+}
+
+.mountain-swatch {
+  position: relative;
+  overflow: hidden;
+  flex-direction: column;
+}
+
+.mountain-swatch__glyph {
+  font-family: 'Inter', sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.mountain-swatch__glyph--highlight {
+  box-shadow: 0 3px 0 0 var(--current-hilite, #f5e1a4);
+  padding-bottom: 2px;
+}
+
+.mountain-swatch input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+/* ---------- Page canvas ---------- */
+
+.mountain-scroll {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 36px 0 96px;
+}
+
+.mountain-pages {
+  width: var(--page-w);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.mountain-page {
+  position: relative;
+  flex: none;
+  width: var(--page-w);
+  height: var(--page-h);
+  background: var(--stone-raised);
+  border-radius: 2px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.10),
+    0 10px 28px rgba(0, 0, 0, 0.10);
+  transition: box-shadow 140ms ease;
+}
+
+.mountain-page:focus-within {
+  box-shadow:
+    0 0 0 2px var(--bronze),
+    0 10px 28px rgba(0, 0, 0, 0.10);
+}
+
+.mountain-page__body {
+  position: relative;
+  height: calc(var(--page-h) - (2 * var(--page-margin)));
+  margin: var(--page-margin);
+  overflow: hidden;
+  outline: none;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+.mountain-page__body:focus-visible {
+  outline: none;
+}
+
+.mountain-page__body.is-empty::before {
+  position: absolute;
+  content: attr(data-placeholder);
+  color: var(--gray);
+  pointer-events: none;
+}
+
+.mountain-page__body p {
+  margin: 0 0 12px;
+}
+
+.mountain-page__body p:last-child {
+  margin-bottom: 0;
+}
+
+.mountain-page__body ul,
+.mountain-page__body ol {
+  margin: 0 0 12px;
+  padding-left: 28px;
+}
+
+.mountain-page__body li {
+  margin-bottom: 4px;
+}
+
+.mountain-page__body a {
+  color: var(--bronze-deep);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.mountain-page__number {
+  position: absolute;
+  bottom: 26px;
+  right: var(--page-margin);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--gray);
+  user-select: none;
+}
+
+/* ---------- Link popover ---------- */
+
+.mountain-link-popover[hidden] {
+  display: none;
+}
+
+.mountain-link-popover {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 10px;
+  background: var(--stone-raised);
+  border: 1px solid var(--gray-line);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.mountain-link-popover__input {
+  width: 240px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--gray-line);
+  background: var(--stone);
+  color: var(--ink);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+}
+
+.mountain-link-popover__actions {
+  display: flex;
+  gap: 4px;
+}
