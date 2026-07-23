@@ -40,6 +40,7 @@
   let savedColorRange = null;
   let savedLinkRange = null;
   let editingLinkEl = null;
+  let pasteMatchStyleArmed = false; // set by Ctrl/Cmd+Shift+V, consumed by the next paste
 
   // ============================================================
   // Page creation & pagination engine (Section 2.1)
@@ -86,6 +87,14 @@
     return key === 'z' || key === 'y';
   }
 
+  // Ctrl+Shift+V / Cmd+Shift+V — "paste and match [page] formatting".
+  // The browser still fires a normal `paste` event for this shortcut, so
+  // we just flag it here and read the flag once, in handlePaste.
+  function isPasteMatchStyleShortcut(e) {
+    const mod = e.metaKey || e.ctrlKey;
+    return mod && e.shiftKey && e.key.toLowerCase() === 'v';
+  }
+
   function attachPageListeners(body) {
     body.addEventListener('input', () => {
       updateEmptyState(body);
@@ -103,6 +112,7 @@
     // Blocking the shortcut here avoids that broken state entirely.
     body.addEventListener('keydown', (e) => {
       if (isUndoRedoShortcut(e)) e.preventDefault();
+      if (isPasteMatchStyleShortcut(e)) pasteMatchStyleArmed = true;
     });
     body.addEventListener('focus', () => {
       activeBody = body;
@@ -367,7 +377,7 @@
     if (!range || range.collapsed) return;
 
     const refEl = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
-    const currentSize = parseFloat(getComputedStyle(refEl).fontSize) || 15;
+    const currentSize = parseFloat(getComputedStyle(refEl).fontSize) || 13;
     const newSize = Math.max(8, Math.min(96, Math.round(currentSize + delta)));
 
     wrapRangeInFontSize(range, newSize);
@@ -697,13 +707,70 @@
     });
   }
 
+  // Same tag/URL rules as sanitizeHTML, but drops every visual style
+  // (bold, italic, colour, font-size, highlight...) rather than keeping
+  // it — so pasted text falls through to the page's own default look.
+  // Block structure (paragraphs/line breaks/lists) and links survive,
+  // since those are content/navigation, not formatting; links keep only
+  // their href, so they render with this page's own link style
+  // (including the underline) instead of the source's.
+  function stripToPageFormatting(node) {
+    Array.from(node.childNodes).forEach((child) => {
+      if (child.nodeType === Node.TEXT_NODE) return;
+      if (child.nodeType !== Node.ELEMENT_NODE) { node.removeChild(child); return; }
+
+      if (STRIP_ENTIRELY.has(child.tagName)) {
+        node.removeChild(child);
+        return;
+      }
+
+      if (child.tagName === 'A') {
+        const href = (child.getAttribute('href') || '').trim();
+        stripToPageFormatting(child);
+        Array.from(child.attributes).forEach((attr) => child.removeAttribute(attr.name));
+        if (!SAFE_URL.test(href)) {
+          // No usable destination — keep the text, drop the tag.
+          while (child.firstChild) node.insertBefore(child.firstChild, child);
+          node.removeChild(child);
+        } else {
+          child.setAttribute('href', href);
+          child.setAttribute('target', '_blank');
+          child.setAttribute('rel', 'noopener noreferrer');
+          child.setAttribute('title', href);
+        }
+        return;
+      }
+
+      if (!ALLOWED_TAGS.has(child.tagName)) {
+        stripToPageFormatting(child);
+        while (child.firstChild) node.insertBefore(child.firstChild, child);
+        node.removeChild(child);
+        return;
+      }
+
+      // Structural tag we keep (P/DIV/UL/OL/LI/BR) — strip every
+      // attribute, including style, so none of the source's formatting
+      // (font, colour, size, weight...) rides along.
+      Array.from(child.attributes).forEach((attr) => child.removeAttribute(attr.name));
+      stripToPageFormatting(child);
+    });
+  }
+
+  function matchPageFormatting(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    stripToPageFormatting(doc.body);
+    return doc.body.innerHTML;
+  }
+
   function handlePaste(e) {
     e.preventDefault();
     const clipboardData = e.clipboardData || window.clipboardData;
     const html = clipboardData.getData('text/html');
+    const matchStyle = pasteMatchStyleArmed;
+    pasteMatchStyleArmed = false;
 
     if (html) {
-      document.execCommand('insertHTML', false, sanitizeHTML(html));
+      document.execCommand('insertHTML', false, matchStyle ? matchPageFormatting(html) : sanitizeHTML(html));
     } else {
       const text = clipboardData.getData('text/plain');
       document.execCommand('insertText', false, text);
@@ -829,7 +896,13 @@
   // that value changes later this stays in sync automatically instead of
   // silently drifting from a hardcoded copy of the number.
   function currentParagraphMarginCss() {
-    const sample = pagesContainer.querySelector('.mountain-page__body p');
+    // Prefer a paragraph that ISN'T `:last-child` — that variant has its
+    // margin-bottom zeroed by our own stylesheet, and picking it by
+    // accident (e.g. when the doc/page only has one paragraph) would
+    // apply a 0 bottom-margin to every copied paragraph instead of the
+    // real gap.
+    const sample = pagesContainer.querySelector('.mountain-page__body p:not(:last-child)') ||
+      pagesContainer.querySelector('.mountain-page__body p');
     if (!sample) return '0 0 2px 0';
     const cs = getComputedStyle(sample);
     return [cs.marginTop, cs.marginRight, cs.marginBottom, cs.marginLeft].join(' ');
@@ -855,7 +928,16 @@
     // Inlining the real margin here keeps the same spacing everywhere.
     const paragraphMargin = currentParagraphMarginCss();
     wrapper.querySelectorAll('p').forEach((p) => {
-      if (!p.getAttribute('style')) p.style.margin = paragraphMargin;
+      if (p.getAttribute('style')) return;
+      // A plain CSS `margin` isn't enough on its own: Word doesn't fully
+      // trust it and falls back to its own "Normal" style's default space
+      // after each paragraph (commonly ~8-10pt) on top of it — which is
+      // what reads as the gap being doubled once pasted. The
+      // mso-margin-*-alt pair tells Word's paragraph engine to defer to
+      // our explicit margin instead of adding its own.
+      p.setAttribute('style',
+        'margin:' + paragraphMargin + ';' +
+        'mso-margin-top-alt:auto;mso-margin-bottom-alt:auto;');
     });
 
     const html =
