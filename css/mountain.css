@@ -43,6 +43,26 @@
   pointer-events: none;
 }
 
+.mountain-fontsize-input {
+  width: 40px;
+  height: 30px;
+  padding: 0 4px;
+  text-align: center;
+  border-radius: 6px;
+  border: 1px solid var(--gray-line);
+  background: var(--stone);
+  color: var(--ink);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  -moz-appearance: textfield;
+}
+
+.mountain-fontsize-input::-webkit-outer-spin-button,
+.mountain-fontsize-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 .mountain-swatch__glyph--highlight {
   box-shadow: 0 3px 0 0 var(--current-hilite, #f5e1a4);
   padding-bottom: 2px;
