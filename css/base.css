@@ -1,0 +1,172 @@
+/* ---------------------------------------------------------
+   Summit — base.css
+   Reset, typography scale, and structural layout.
+   Colour lives entirely in theme.css.
+--------------------------------------------------------- */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+svg {
+  display: block;
+}
+
+:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ---------- App shell layout ---------- */
+
+.summit-header {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  height: 60px;
+  padding: 0 20px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.summit-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.summit-mark {
+  width: 22px;
+  height: 22px;
+}
+
+.summit-wordmark {
+  font-family: 'Fraunces', serif;
+  font-optical-sizing: auto;
+  font-weight: 600;
+  font-size: 19px;
+  letter-spacing: 0.01em;
+}
+
+.summit-tabs {
+  display: flex;
+  gap: 4px;
+  flex: 1 1 auto;
+  height: 100%;
+  align-items: flex-end;
+}
+
+.summit-tab {
+  position: relative;
+  border: none;
+  background: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 8px 8px 0 0;
+  transition: transform 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+
+.summit-tab__peak {
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 7px solid transparent;
+  transition: border-bottom-color 160ms ease;
+}
+
+.summit-tab[aria-selected="true"] {
+  transform: translateY(-2px);
+}
+
+.summit-theme-toggle {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.summit-theme-toggle svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  position: absolute;
+  transition: opacity 160ms ease, transform 220ms ease;
+}
+
+.icon-moon { opacity: 0; transform: scale(0.6) rotate(-40deg); }
+.icon-sun { opacity: 1; transform: scale(1) rotate(0deg); }
+
+[data-theme="dark"] .icon-sun { opacity: 0; transform: scale(0.6) rotate(40deg); }
+[data-theme="dark"] .icon-moon { opacity: 1; transform: scale(1) rotate(0deg); }
+
+.summit-main {
+  height: calc(100% - 60px);
+  overflow: auto;
+}
+
+.summit-panel {
+  height: 100%;
+}
+
+.summit-placeholder {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.summit-placeholder__eyebrow {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+.summit-placeholder__label {
+  font-size: 14px;
+  margin: 0;
+}

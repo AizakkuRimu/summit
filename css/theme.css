@@ -1,0 +1,77 @@
+/* ---------------------------------------------------------
+   Summit — theme.css
+   Bronze / gray palette. White used sparingly (Section 10.1).
+   Light mode is default; [data-theme="dark"] overrides.
+--------------------------------------------------------- */
+
+:root {
+  --stone:        #EFEAE2;  /* page background, light mode */
+  --stone-raised: #F7F4EE;  /* header / card surfaces, light mode */
+  --ink:          #24211D;  /* primary text, light mode */
+  --gray:         #6B6660;  /* secondary text */
+  --gray-line:    #D8D2C7;  /* hairline dividers */
+  --bronze:       #9C6B3E;  /* primary accent */
+  --bronze-deep:  #6E4A2C;  /* accent hover / active */
+  --bronze-soft:  #E8D9C4;  /* accent tint (selected states) */
+}
+
+[data-theme="dark"] {
+  --stone:        #1D1B18;
+  --stone-raised: #26231F;
+  --ink:          #EDE7DC;
+  --gray:         #A39C90;
+  --gray-line:    #3A352E;
+  --bronze:       #C99A6C;
+  --bronze-deep:  #E8C39A;
+  --bronze-soft:  #3E3226;
+}
+
+body {
+  background: var(--stone);
+  color: var(--ink);
+}
+
+.summit-header {
+  background: var(--stone-raised);
+  border-bottom: 1px solid var(--gray-line);
+  color: var(--ink);
+}
+
+.summit-mark__outer { fill: var(--bronze); }
+.summit-mark__inner { fill: var(--stone-raised); }
+
+.summit-tab {
+  color: var(--gray);
+}
+
+.summit-tab:hover {
+  color: var(--ink);
+  background: var(--bronze-soft);
+}
+
+.summit-tab[aria-selected="true"] {
+  color: var(--ink);
+  background: var(--stone);
+}
+
+.summit-tab[aria-selected="true"] .summit-tab__peak {
+  border-bottom-color: var(--bronze);
+}
+
+.summit-theme-toggle {
+  color: var(--gray);
+  background: transparent;
+}
+
+.summit-theme-toggle:hover {
+  color: var(--bronze);
+  background: var(--bronze-soft);
+}
+
+.summit-placeholder__eyebrow {
+  color: var(--bronze);
+}
+
+.summit-placeholder__label {
+  color: var(--gray);
+}
