@@ -673,6 +673,202 @@
   });
 
   // ============================================================
+  // Right-click context menu
+  //
+  // A menu-item click never fires the browser's native 'paste'
+  // event, so the paste actions here go through the async
+  // Clipboard API (navigator.clipboard) instead of the
+  // clipboardData used by the Ctrl+V handler above. That also
+  // means they need a secure context (https/localhost) and — in
+  // some browsers — a one-time permission grant; if the read
+  // fails we fall back to telling the user to use Ctrl+V.
+  //
+  // "Horizontal" vs "vertical" paste exist because pasting a
+  // table copied from outside a spreadsheet app (a web page, a
+  // Word/Docs table, etc.) sometimes arrives as plain text with
+  // no tabs between columns — just one cell per line. Ctrl+V then
+  // has no choice but to lay that out as a single column. These
+  // two menu actions parse the same tab/newline grid either way
+  // and let the user explicitly flip it, rather than guessing.
+  // ============================================================
+
+  const ctxMenu = document.getElementById('peaks-ctxmenu');
+  let contextCell = null; // { r, c } — cell under the cursor when the menu was opened
+
+  function hideContextMenu() {
+    ctxMenu.hidden = true;
+  }
+
+  function showContextMenu(x, y) {
+    ctxMenu.hidden = false;
+    const rect = ctxMenu.getBoundingClientRect();
+    const left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8));
+    const top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8));
+    ctxMenu.style.left = left + 'px';
+    ctxMenu.style.top = top + 'px';
+  }
+
+  scrollEl.addEventListener('contextmenu', (e) => {
+    const td = e.target.closest('td.peaks-cell');
+
+    // While actively typing inside a cell, leave the browser's own
+    // context menu alone (spellcheck, native copy/cut/paste of the
+    // in-place text highlight) — same carve-out the keyboard
+    // copy/cut handlers above make for an active edit.
+    if (editingCell && td === editingCell.td) { hideContextMenu(); return; }
+
+    e.preventDefault();
+    if (!td) { hideContextMenu(); return; }
+    if (editingCell) commitEdit();
+
+    const r = Number(td.dataset.row), c = Number(td.dataset.col);
+    contextCell = { r, c };
+
+    // Right-clicking outside the current selection collapses it to
+    // just that cell, same as Excel/Sheets. Right-clicking inside an
+    // existing multi-cell selection leaves it alone, so "Copy" /
+    // "Paste table" still act on the whole range.
+    const inSelection = selection && r >= selection.r1 && r <= selection.r2 && c >= selection.c1 && c <= selection.c2;
+    if (!inSelection) {
+      setSelection(r, c, r, c);
+      focusCellVisually(td);
+    }
+
+    showContextMenu(e.clientX, e.clientY);
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!ctxMenu.hidden && !ctxMenu.contains(e.target)) hideContextMenu();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !ctxMenu.hidden) hideContextMenu();
+  });
+  scrollEl.addEventListener('scroll', hideContextMenu);
+  window.addEventListener('resize', hideContextMenu);
+  window.addEventListener('blur', hideContextMenu);
+
+  async function writeClipboardText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (err) {
+      // Fallback for contexts without Clipboard-API write permission:
+      // drive the legacy synchronous copy command off the hidden trap.
+      clipTrap.value = text;
+      clipTrap.focus();
+      clipTrap.select();
+      const ok = document.execCommand('copy');
+      clipTrap.value = '';
+      return ok;
+    }
+  }
+
+  async function readClipboardText() {
+    try {
+      return await navigator.clipboard.readText();
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function transposeMatrix(matrix) {
+    const cols = Math.max(...matrix.map((row) => row.length));
+    const out = [];
+    for (let c = 0; c < cols; c++) {
+      const row = [];
+      for (let r = 0; r < matrix.length; r++) row.push(matrix[r][c] ?? '');
+      out.push(row);
+    }
+    return out;
+  }
+
+  const URL_RE = /^(https?:\/\/|www\.)\S+$/i;
+
+  function pasteMatrix(startR, startC, matrix, { autolink = false } = {}) {
+    const endR = startR + matrix.length - 1;
+    const endC = startC + Math.max(...matrix.map((row) => row.length)) - 1;
+    ensureGridSize(endR + 1, endC + 1);
+
+    const coords = [];
+    for (let i = 0; i < matrix.length; i++) {
+      for (let j = 0; j < matrix[i].length; j++) coords.push({ r: startR + i, c: startC + j });
+    }
+    withHistory(coords, () => {
+      for (let i = 0; i < matrix.length; i++) {
+        for (let j = 0; j < matrix[i].length; j++) {
+          const r = startR + i, c = startC + j;
+          if (r >= numRows || c >= numCols) continue;
+          const td = cellsEl[r][c];
+          const value = matrix[i][j] ?? '';
+          const trimmed = value.trim();
+          if (autolink && URL_RE.test(trimmed)) {
+            const href = /^www\./i.test(trimmed) ? 'https://' + trimmed : trimmed;
+            td.textContent = '';
+            const a = makeLinkEl(href);
+            a.textContent = value;
+            td.appendChild(a);
+          } else {
+            td.textContent = value;
+          }
+        }
+      }
+    });
+    setSelection(startR, startC, endR, endC);
+  }
+
+  function pasteRawIntoCell(r, c, text) {
+    withHistory([{ r, c }], () => {
+      cellsEl[r][c].textContent = text;
+    });
+    setSelection(r, c, r, c);
+  }
+
+  function ctxAction(name) {
+    hideContextMenu();
+    if (!contextCell) return;
+    const { r, c } = contextCell;
+
+    if (name === 'copy-text') {
+      writeClipboardText(selectionToTSV(selection));
+      return;
+    }
+    if (name === 'copy-cell') {
+      writeClipboardText(cellsEl[r][c].classList.contains('peaks-cell--merge-slave') ? '' : (cellsEl[r][c].textContent || ''));
+      return;
+    }
+    if (name === 'cut') {
+      writeClipboardText(selectionToTSV(selection)).then(() => {
+        withHistory(coordsForSelection(selection), () => {
+          forEachSelectedCell((td) => { td.textContent = ''; });
+        });
+      });
+      return;
+    }
+
+    // Everything below needs to read the clipboard.
+    readClipboardText().then((text) => {
+      if (text == null) {
+        alert("Couldn't read the clipboard for that — your browser may be blocking it. Try Ctrl+V instead.");
+        return;
+      }
+      if (!text) return;
+
+      if (name === 'paste-raw') {
+        pasteRawIntoCell(r, c, text);
+        return;
+      }
+
+      let matrix = parseClipboardText(text);
+      if (name === 'paste-vertical') matrix = transposeMatrix(matrix);
+      pasteMatrix(r, c, matrix, { autolink: name === 'paste-autolink' });
+    });
+  }
+
+  ctxMenu.querySelectorAll('[data-ctx-action]').forEach((btn) => {
+    btn.addEventListener('click', () => ctxAction(btn.dataset.ctxAction));
+  });
+
+  // ============================================================
   // Fill colour & borders (Section 3.2)
   // ============================================================
 
