@@ -622,15 +622,79 @@
     }
   }
 
+  // ============================================================
+  // Paste modes — vertical / raw / auto-link
+  //
+  // A context-menu click never fires the browser's native 'paste'
+  // event, so it has no reliable way to get real clipboard content
+  // without falling back to the async navigator.clipboard.read()/
+  // readText() API — and that needs a permission grant that a lot
+  // of browsers/setups flatly refuse for a plain button click.
+  // Ctrl+V never has that problem: it's the one universally-trusted
+  // paste gesture, and the browser hands its handler real
+  // clipboardData for free, no permission involved.
+  //
+  // So rather than reading the clipboard ourselves, "arming" a mode
+  // (via the keyboard shortcut below, or via the context-menu items
+  // further down) just sets a flag and shows a brief on-screen hint.
+  // The very next real Ctrl+V (or Cmd+V) consumes that flag and
+  // pastes accordingly, then disarms itself. Nothing to block.
+  // ============================================================
+
+  const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
+  const modLabel = isMac ? '⌘' : 'Ctrl';
+  const pasteHint = document.getElementById('peaks-paste-hint');
+  let pendingPasteMode = null; // null (default/horizontal) | 'vertical' | 'raw' | 'autolink'
+  let pendingPasteTimer = null;
+
+  function armPasteMode(mode, label) {
+    pendingPasteMode = mode;
+    pasteHint.textContent = `${label} — press ${modLabel}+V now`;
+    pasteHint.hidden = false;
+    clearTimeout(pendingPasteTimer);
+    pendingPasteTimer = setTimeout(disarmPasteMode, 8000);
+  }
+
+  function disarmPasteMode() {
+    pendingPasteMode = null;
+    pasteHint.hidden = true;
+    clearTimeout(pendingPasteTimer);
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && pendingPasteMode) disarmPasteMode();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.key.toLowerCase() !== 'v') return;
+    // Most browsers don't treat Ctrl/Cmd+Shift+V as a native paste
+    // gesture on their own — this just arms vertical mode. (A few
+    // browsers do fire a real paste from it too; if so the handler
+    // below consumes the mode immediately and the hint never shows.)
+    e.preventDefault();
+    armPasteMode('vertical', 'Vertical paste armed');
+  }, true);
+
   scrollEl.addEventListener('paste', (e) => {
     e.preventDefault();
+    const mode = pendingPasteMode;
+    disarmPasteMode();
+
     const text = (e.clipboardData || window.clipboardData).getData('text/plain');
     if (!text) return;
-    const matrix = parseClipboardText(text);
+
+    if (mode === 'raw') {
+      if (editingCell) commitEdit();
+      if (!selection) return;
+      pasteRawIntoCell(selection.r1, selection.c1, text);
+      return;
+    }
+
+    let matrix = parseClipboardText(text);
     const singleValue = matrix.length === 1 && matrix[0].length === 1;
 
     if (editingCell) {
-      if (singleValue) {
+      if (singleValue && !mode) {
         document.execCommand('insertText', false, matrix[0][0]);
         return;
       }
@@ -641,7 +705,7 @@
 
     if (!selection) return;
 
-    if (singleValue && (selection.r1 !== selection.r2 || selection.c1 !== selection.c2)) {
+    if (singleValue && !mode && (selection.r1 !== selection.r2 || selection.c1 !== selection.c2)) {
       // A single copied value pasted onto a multi-cell selection fills
       // the whole selection with it, same as Excel/Sheets.
       withHistory(coordsForSelection(selection), () => {
@@ -650,50 +714,32 @@
       return;
     }
 
-    const startR = selection.r1;
-    const startC = selection.c1;
-    const endR = startR + matrix.length - 1;
-    const endC = startC + Math.max(...matrix.map((row) => row.length)) - 1;
-    ensureGridSize(endR + 1, endC + 1);
-
-    const coords = [];
-    for (let i = 0; i < matrix.length; i++) {
-      for (let j = 0; j < matrix[i].length; j++) coords.push({ r: startR + i, c: startC + j });
-    }
-    withHistory(coords, () => {
-      for (let i = 0; i < matrix.length; i++) {
-        for (let j = 0; j < matrix[i].length; j++) {
-          const r = startR + i, c = startC + j;
-          if (r >= numRows || c >= numCols) continue;
-          cellsEl[r][c].textContent = matrix[i][j];
-        }
-      }
-    });
-    setSelection(startR, startC, endR, endC);
+    if (mode === 'vertical') matrix = transposeMatrix(matrix);
+    pasteMatrix(selection.r1, selection.c1, matrix, { autolink: mode === 'autolink' });
   });
 
   // ============================================================
   // Right-click context menu
   //
-  // A menu-item click never fires the browser's native 'paste'
-  // event, so the paste actions here go through the async
-  // Clipboard API (navigator.clipboard) instead of the
-  // clipboardData used by the Ctrl+V handler above. That also
-  // means they need a secure context (https/localhost) and — in
-  // some browsers — a one-time permission grant; if the read
-  // fails we fall back to telling the user to use Ctrl+V.
-  //
-  // "Horizontal" vs "vertical" paste exist because pasting a
-  // table copied from outside a spreadsheet app (a web page, a
-  // Word/Docs table, etc.) sometimes arrives as plain text with
-  // no tabs between columns — just one cell per line. Ctrl+V then
-  // has no choice but to lay that out as a single column. These
-  // two menu actions parse the same tab/newline grid either way
-  // and let the user explicitly flip it, rather than guessing.
+  // Every paste item here just calls armPasteMode() (defined above)
+  // and lets the user's next real Ctrl+V do the actual pasting —
+  // see the big comment above the paste handler for why. "Copy" /
+  // "Copy cell" / "Cut" do act immediately, via writeClipboardText()
+  // below, which is a plain synchronous clipboard *write* and has a
+  // safe fallback even where the async API is blocked.
   // ============================================================
 
   const ctxMenu = document.getElementById('peaks-ctxmenu');
   let contextCell = null; // { r, c } — cell under the cursor when the menu was opened
+
+  const shortcutFor = {
+    'paste-horizontal': `${modLabel}+V`,
+    'paste-vertical': `${modLabel}+Shift+V`
+  };
+  Object.keys(shortcutFor).forEach((name) => {
+    const hint = ctxMenu.querySelector(`[data-ctx-hint="${name}"]`);
+    if (hint) hint.textContent = shortcutFor[name];
+  });
 
   function hideContextMenu() {
     ctxMenu.hidden = true;
@@ -760,14 +806,6 @@
       const ok = document.execCommand('copy');
       clipTrap.value = '';
       return ok;
-    }
-  }
-
-  async function readClipboardText() {
-    try {
-      return await navigator.clipboard.readText();
-    } catch (err) {
-      return null;
     }
   }
 
@@ -845,23 +883,13 @@
       return;
     }
 
-    // Everything below needs to read the clipboard.
-    readClipboardText().then((text) => {
-      if (text == null) {
-        alert("Couldn't read the clipboard for that — your browser may be blocking it. Try Ctrl+V instead.");
-        return;
-      }
-      if (!text) return;
-
-      if (name === 'paste-raw') {
-        pasteRawIntoCell(r, c, text);
-        return;
-      }
-
-      let matrix = parseClipboardText(text);
-      if (name === 'paste-vertical') matrix = transposeMatrix(matrix);
-      pasteMatrix(r, c, matrix, { autolink: name === 'paste-autolink' });
-    });
+    if (name === 'paste-horizontal') {
+      alert(`That's already the default — just press ${modLabel}+V.`);
+      return;
+    }
+    if (name === 'paste-vertical') { armPasteMode('vertical', 'Vertical paste armed'); return; }
+    if (name === 'paste-autolink') { armPasteMode('autolink', 'Auto-link paste armed'); return; }
+    if (name === 'paste-raw') { armPasteMode('raw', 'Raw text paste armed'); return; }
   }
 
   ctxMenu.querySelectorAll('[data-ctx-action]').forEach((btn) => {
