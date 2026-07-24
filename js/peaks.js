@@ -206,6 +206,126 @@
     forRange(selection, (r, c) => fn(cellsEl[r][c], r, c));
   }
 
+  function coordsForSelection(sel) {
+    const list = [];
+    if (!sel) return list;
+    forRange(sel, (r, c) => list.push({ r, c }));
+    return list;
+  }
+
+  // ============================================================
+  // Undo / redo history
+  //
+  // Granularity matches Excel/Sheets: one step per *committed*
+  // action (a finished cell edit, a formatting button click, a
+  // paste, etc.) rather than per keystroke. Every mutating action
+  // in the app funnels through withHistory()/beginHistory()+
+  // commitHistory() below so Ctrl+Z / Ctrl+Y undoes it uniformly,
+  // whether it touched content, styling, merges, or a paste.
+  // ============================================================
+
+  const HISTORY_LIMIT = 100;
+  const TRANSIENT_CLASSES = new Set(['peaks-cell--selected', 'peaks-cell--primary', 'peaks-cell--editing']);
+  let undoStack = [];
+  let redoStack = [];
+  let isApplyingHistory = false;
+
+  function snapshotCell(r, c) {
+    const td = cellsEl[r][c];
+    return {
+      r, c,
+      html: td.innerHTML,
+      style: td.getAttribute('style') || '',
+      dataClasses: Array.from(td.classList).filter((cls) => !TRANSIENT_CLASSES.has(cls)),
+      rowSpan: td.rowSpan || 1,
+      colSpan: td.colSpan || 1
+    };
+  }
+
+  function snapshotCells(coords) {
+    return coords.map(({ r, c }) => snapshotCell(r, c));
+  }
+
+  function snapshotsEqual(a, b) {
+    return a.html === b.html && a.style === b.style && a.rowSpan === b.rowSpan &&
+      a.colSpan === b.colSpan && a.dataClasses.join(' ') === b.dataClasses.join(' ');
+  }
+
+  function restoreCellSnapshot(snap) {
+    const td = cellsEl[snap.r][snap.c];
+    td.innerHTML = snap.html;
+    if (snap.style) td.setAttribute('style', snap.style); else td.removeAttribute('style');
+    // Keep whatever transient selection/editing classes are currently on
+    // the cell — those describe the *current* UI state, not the data,
+    // and restoring an old snapshot shouldn't fight with live selection.
+    const transientNow = Array.from(td.classList).filter((cls) => TRANSIENT_CLASSES.has(cls));
+    td.className = snap.dataClasses.concat(transientNow).join(' ');
+    td.rowSpan = snap.rowSpan;
+    td.colSpan = snap.colSpan;
+  }
+
+  function syncMergedMastersFor(coords) {
+    coords.forEach(({ r, c }) => {
+      const td = cellsEl[r][c];
+      const key = r + ',' + c;
+      if (td.classList.contains('peaks-cell--merge-master')) mergedMasters.add(key);
+      else mergedMasters.delete(key);
+    });
+  }
+
+  function pushHistoryEntry(before, after) {
+    const changed = before.some((b, i) => !snapshotsEqual(b, after[i]));
+    if (!changed) return;
+    undoStack.push({ before, after });
+    if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+    redoStack = [];
+  }
+
+  // For actions that happen in one synchronous call (button clicks, paste,
+  // delete, etc.) — snapshots before and after `fn()` runs, in one go.
+  function withHistory(coords, fn) {
+    if (isApplyingHistory || !coords || !coords.length) { fn(); return; }
+    const before = snapshotCells(coords);
+    fn();
+    pushHistoryEntry(before, snapshotCells(coords));
+  }
+
+  // For actions that stream over time (dragging the fill-colour picker) —
+  // call beginHistory() once at the start of the gesture and commitHistory()
+  // once it ends, so the whole drag becomes a single undo step.
+  function beginHistory(coords) {
+    return { coords, before: snapshotCells(coords) };
+  }
+
+  function commitHistory(pending) {
+    if (!pending || !pending.coords.length) return;
+    pushHistoryEntry(pending.before, snapshotCells(pending.coords));
+  }
+
+  function applySnapshotSet(list) {
+    isApplyingHistory = true;
+    list.forEach(restoreCellSnapshot);
+    isApplyingHistory = false;
+    syncMergedMastersFor(list);
+    syncToolbarState();
+  }
+
+  function undo() {
+    if (editingCell) commitEdit();
+    if (!undoStack.length) return;
+    const entry = undoStack.pop();
+    applySnapshotSet(entry.before);
+    redoStack.push(entry);
+  }
+
+  function redo() {
+    if (editingCell) commitEdit();
+    if (!redoStack.length) return;
+    const entry = redoStack.pop();
+    applySnapshotSet(entry.after);
+    undoStack.push(entry);
+  }
+
   // ============================================================
   // Editing
   // ============================================================
@@ -214,7 +334,7 @@
     opts = opts || {};
     if (editingCell) commitEdit();
     const td = cellsEl[r][c];
-    editingCell = { r, c, td, previousValue: td.textContent };
+    editingCell = { r, c, td, previousValue: td.textContent, beforeSnapshot: snapshotCell(r, c) };
     td.contentEditable = 'true';
     td.classList.add('peaks-cell--editing');
     if (opts.clear) td.textContent = opts.char || '';
@@ -229,9 +349,11 @@
 
   function commitEdit() {
     if (!editingCell) return;
-    editingCell.td.contentEditable = 'false';
-    editingCell.td.classList.remove('peaks-cell--editing');
+    const { r, c, td, beforeSnapshot } = editingCell;
+    td.contentEditable = 'false';
+    td.classList.remove('peaks-cell--editing');
     editingCell = null;
+    if (!isApplyingHistory) pushHistoryEntry([beforeSnapshot], [snapshotCell(r, c)]);
   }
 
   function cancelEdit() {
@@ -266,7 +388,13 @@
         window.open(linkEl.getAttribute('href'), '_blank', 'noopener');
         return;
       }
-      if (editingCell && editingCell.td !== td) commitEdit();
+      // While actively editing this exact cell, leave the mouse alone —
+      // let the browser place a caret or drag out a text highlight
+      // natively. Hijacking the drag into cell-range selection here is
+      // what was breaking "highlight a word, then click Bold."
+      if (editingCell && editingCell.td === td) return;
+
+      if (editingCell) commitEdit();
       const r = +td.dataset.row, c = +td.dataset.col;
       e.preventDefault();
       isSelecting = true;
@@ -368,6 +496,14 @@
   // ============================================================
 
   grid.addEventListener('keydown', (e) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+    if (mod && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
+      e.preventDefault();
+      redo();
+      return;
+    }
+
     if (editingCell) {
       if (e.key === 'Enter' && e.shiftKey) {
         e.preventDefault();
@@ -397,7 +533,9 @@
     else if (e.key === 'Enter' || e.key === 'F2') { e.preventDefault(); startEditing(anchor.r, anchor.c, { clear: false }); }
     else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
-      forEachSelectedCell((td) => { td.textContent = ''; });
+      withHistory(coordsForSelection(selection), () => {
+        forEachSelectedCell((td) => { td.textContent = ''; });
+      });
     } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
       startEditing(anchor.r, anchor.c, { clear: true, char: e.key });
@@ -409,12 +547,121 @@
   });
 
   // ============================================================
+  // Clipboard — copy / cut / paste
+  //
+  // Previously there was no paste handler at all: pasting only did
+  // anything once a cell was contentEditable (i.e. after a double-
+  // click), and even then the browser just dumped the raw clipboard
+  // text into that one cell instead of spreading a table across
+  // cells. This adds a real Excel/Sheets-style round trip: copy/cut
+  // serialise the selection as tab/newline-delimited text, and paste
+  // parses that same shape back out and distributes it across cells,
+  // growing the grid if needed.
+  // ============================================================
+
+  function selectionToTSV(sel) {
+    const rows = [];
+    for (let r = sel.r1; r <= sel.r2; r++) {
+      const cols = [];
+      for (let c = sel.c1; c <= sel.c2; c++) {
+        const td = cellsEl[r][c];
+        cols.push(td.classList.contains('peaks-cell--merge-slave') ? '' : (td.textContent || ''));
+      }
+      rows.push(cols.join('\t'));
+    }
+    return rows.join('\n');
+  }
+
+  function parseClipboardText(text) {
+    const rows = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    // Drop one trailing empty row some apps append after the last real row.
+    if (rows.length > 1 && rows[rows.length - 1] === '') rows.pop();
+    return rows.map((row) => row.split('\t'));
+  }
+
+  function ensureGridSize(minRows, minCols) {
+    if (minRows > numRows) addRows(Math.max(minRows - numRows, ROWS_CHUNK));
+    if (minCols > numCols) addColumns(Math.max(minCols - numCols, COLS_CHUNK));
+  }
+
+  grid.addEventListener('copy', (e) => handleCopyOrCut(e, false));
+  grid.addEventListener('cut', (e) => handleCopyOrCut(e, true));
+
+  function handleCopyOrCut(e, isCut) {
+    if (editingCell) return; // let the browser copy/cut the in-place text highlight normally
+    if (!selection) return;
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', selectionToTSV(selection));
+    if (isCut) {
+      withHistory(coordsForSelection(selection), () => {
+        forEachSelectedCell((td) => { td.textContent = ''; });
+      });
+    }
+  }
+
+  grid.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+    if (!text) return;
+    const matrix = parseClipboardText(text);
+    const singleValue = matrix.length === 1 && matrix[0].length === 1;
+
+    if (editingCell) {
+      if (singleValue) {
+        document.execCommand('insertText', false, matrix[0][0]);
+        return;
+      }
+      // A real multi-cell paste landing mid-edit: commit first, then
+      // distribute it starting at that same cell.
+      commitEdit();
+    }
+
+    if (!selection) return;
+
+    if (singleValue && (selection.r1 !== selection.r2 || selection.c1 !== selection.c2)) {
+      // A single copied value pasted onto a multi-cell selection fills
+      // the whole selection with it, same as Excel/Sheets.
+      withHistory(coordsForSelection(selection), () => {
+        forEachSelectedCell((td) => { td.textContent = matrix[0][0]; });
+      });
+      return;
+    }
+
+    const startR = selection.r1;
+    const startC = selection.c1;
+    const endR = startR + matrix.length - 1;
+    const endC = startC + Math.max(...matrix.map((row) => row.length)) - 1;
+    ensureGridSize(endR + 1, endC + 1);
+
+    const coords = [];
+    for (let i = 0; i < matrix.length; i++) {
+      for (let j = 0; j < matrix[i].length; j++) coords.push({ r: startR + i, c: startC + j });
+    }
+    withHistory(coords, () => {
+      for (let i = 0; i < matrix.length; i++) {
+        for (let j = 0; j < matrix[i].length; j++) {
+          const r = startR + i, c = startC + j;
+          if (r >= numRows || c >= numCols) continue;
+          cellsEl[r][c].textContent = matrix[i][j];
+        }
+      }
+    });
+    setSelection(startR, startC, endR, endC);
+  });
+
+  // ============================================================
   // Fill colour & borders (Section 3.2)
   // ============================================================
 
+  let fillHistoryPending = null;
   fillInput.addEventListener('input', () => {
+    if (!fillHistoryPending) fillHistoryPending = beginHistory(coordsForSelection(selection));
     fillGlyph.style.background = fillInput.value;
     forEachSelectedCell((td) => { td.style.backgroundColor = fillInput.value; });
+  });
+  fillInput.addEventListener('change', () => {
+    commitHistory(fillHistoryPending);
+    fillHistoryPending = null;
   });
 
   function borderCss(style) {
@@ -425,33 +672,35 @@
 
   function applyBorder(edge) {
     if (!selection) return;
-    if (edge === 'none') {
-      forEachSelectedCell((td) => {
-        td.style.borderTop = '';
-        td.style.borderBottom = '';
-        td.style.borderLeft = '';
-        td.style.borderRight = '';
+    withHistory(coordsForSelection(selection), () => {
+      if (edge === 'none') {
+        forEachSelectedCell((td) => {
+          td.style.borderTop = '';
+          td.style.borderBottom = '';
+          td.style.borderLeft = '';
+          td.style.borderRight = '';
+        });
+        return;
+      }
+
+      const css = borderCss(borderStyleSelect.value);
+
+      if (edge === 'all') {
+        forEachSelectedCell((td) => {
+          td.style.borderTop = css;
+          td.style.borderBottom = css;
+          td.style.borderLeft = css;
+          td.style.borderRight = css;
+        });
+        return;
+      }
+
+      forEachSelectedCell((td, r, c) => {
+        if ((edge === 'outside' || edge === 'top') && r === selection.r1) td.style.borderTop = css;
+        if ((edge === 'outside' || edge === 'bottom') && r === selection.r2) td.style.borderBottom = css;
+        if ((edge === 'outside' || edge === 'left') && c === selection.c1) td.style.borderLeft = css;
+        if ((edge === 'outside' || edge === 'right') && c === selection.c2) td.style.borderRight = css;
       });
-      return;
-    }
-
-    const css = borderCss(borderStyleSelect.value);
-
-    if (edge === 'all') {
-      forEachSelectedCell((td) => {
-        td.style.borderTop = css;
-        td.style.borderBottom = css;
-        td.style.borderLeft = css;
-        td.style.borderRight = css;
-      });
-      return;
-    }
-
-    forEachSelectedCell((td, r, c) => {
-      if ((edge === 'outside' || edge === 'top') && r === selection.r1) td.style.borderTop = css;
-      if ((edge === 'outside' || edge === 'bottom') && r === selection.r2) td.style.borderBottom = css;
-      if ((edge === 'outside' || edge === 'left') && c === selection.c1) td.style.borderLeft = css;
-      if ((edge === 'outside' || edge === 'right') && c === selection.c2) td.style.borderRight = css;
     });
   }
 
@@ -460,7 +709,9 @@
   });
 
   document.getElementById('peaks-fill-clear').addEventListener('click', () => {
-    forEachSelectedCell((td) => { td.style.backgroundColor = ''; });
+    withHistory(coordsForSelection(selection), () => {
+      forEachSelectedCell((td) => { td.style.backgroundColor = ''; });
+    });
   });
 
   // ============================================================
@@ -553,12 +804,15 @@
   function withRunOrCell(runFn, cellFn) {
     const range = activeEditingSelection();
     if (range) {
-      editingCell.td.focus();
-      restoreSelection(range);
-      runFn(range);
-      editingCell.td.normalize();
+      const coords = [{ r: editingCell.r, c: editingCell.c }];
+      withHistory(coords, () => {
+        editingCell.td.focus();
+        restoreSelection(range);
+        runFn(range);
+        editingCell.td.normalize();
+      });
     } else {
-      cellFn();
+      withHistory(coordsForSelection(selection), cellFn);
     }
     syncToolbarState();
   }
@@ -653,12 +907,16 @@
   // ---------- Alignment / wrap (always whole-cell) ----------
 
   function setHAlign(value) {
-    forEachSelectedCell((td) => { td.style.textAlign = value; });
+    withHistory(coordsForSelection(selection), () => {
+      forEachSelectedCell((td) => { td.style.textAlign = value; });
+    });
     syncToolbarState();
   }
 
   function setVAlign(value) {
-    forEachSelectedCell((td) => { td.style.verticalAlign = value; });
+    withHistory(coordsForSelection(selection), () => {
+      forEachSelectedCell((td) => { td.style.verticalAlign = value; });
+    });
     syncToolbarState();
   }
 
@@ -666,12 +924,14 @@
     const p = primaryTd();
     if (!p) return;
     const turnOn = !p.classList.contains('peaks-cell--wrap');
-    forEachSelectedCell((td, r) => {
-      td.classList.toggle('peaks-cell--wrap', turnOn);
-      if (turnOn && rowHeights[r] <= DEFAULT_ROW_HEIGHT) {
-        rowHeights[r] = 48;
-        tbody.children[r].style.height = '48px';
-      }
+    withHistory(coordsForSelection(selection), () => {
+      forEachSelectedCell((td, r) => {
+        td.classList.toggle('peaks-cell--wrap', turnOn);
+        if (turnOn && rowHeights[r] <= DEFAULT_ROW_HEIGHT) {
+          rowHeights[r] = 48;
+          tbody.children[r].style.height = '48px';
+        }
+      });
     });
     syncToolbarState();
   }
@@ -727,13 +987,15 @@
 
   function toggleList(kind) {
     if (editingCell) commitEdit();
-    forEachSelectedCell((td) => {
-      const existingMarker = td.querySelector('span.peaks-list-marker');
-      const existingKind = existingMarker ? existingMarker.dataset.kind : null;
-      removeListMarkers(td);
-      if (existingKind === kind) return; // was already this kind — toggle off
-      addListMarkers(td, kind);
-      td.classList.add('peaks-cell--wrap');
+    withHistory(coordsForSelection(selection), () => {
+      forEachSelectedCell((td) => {
+        const existingMarker = td.querySelector('span.peaks-list-marker');
+        const existingKind = existingMarker ? existingMarker.dataset.kind : null;
+        removeListMarkers(td);
+        if (existingKind === kind) return; // was already this kind — toggle off
+        addListMarkers(td, kind);
+        td.classList.add('peaks-cell--wrap');
+      });
     });
     syncToolbarState();
   }
@@ -776,17 +1038,19 @@
       // Highlighted text inside the cell being edited — link just that text.
       const url = window.prompt('Enter URL for the highlighted text:', 'https://');
       if (!url) return;
-      editingCell.td.focus();
-      restoreSelection(range);
-      const a = makeLinkEl(url);
-      try {
-        range.surroundContents(a);
-      } catch (e) {
-        const frag = range.extractContents();
-        a.appendChild(frag);
-        range.insertNode(a);
-      }
-      editingCell.td.normalize();
+      withHistory([{ r: editingCell.r, c: editingCell.c }], () => {
+        editingCell.td.focus();
+        restoreSelection(range);
+        const a = makeLinkEl(url);
+        try {
+          range.surroundContents(a);
+        } catch (e) {
+          const frag = range.extractContents();
+          a.appendChild(frag);
+          range.insertNode(a);
+        }
+        editingCell.td.normalize();
+      });
       return;
     }
 
@@ -798,13 +1062,15 @@
     const url = window.prompt('Enter URL for the selected cell(s):', existing);
     if (!url) return;
     if (editingCell) commitEdit();
-    forEachSelectedCell((td) => {
-      unwrapLinksIn(td);
-      const text = td.textContent;
-      td.textContent = '';
-      const a = makeLinkEl(url);
-      a.textContent = text;
-      td.appendChild(a);
+    withHistory(coordsForSelection(selection), () => {
+      forEachSelectedCell((td) => {
+        unwrapLinksIn(td);
+        const text = td.textContent;
+        td.textContent = '';
+        const a = makeLinkEl(url);
+        a.textContent = text;
+        td.appendChild(a);
+      });
     });
     syncToolbarState();
   }
@@ -812,41 +1078,49 @@
   function removeLink() {
     const range = activeEditingSelection();
     if (range) {
-      let node = range.commonAncestorContainer;
-      while (node && node !== editingCell.td && node.nodeName !== 'A') node = node.parentNode;
-      if (node && node.nodeName === 'A') {
-        const parent = node.parentNode;
-        while (node.firstChild) parent.insertBefore(node.firstChild, node);
-        parent.removeChild(node);
-        parent.normalize();
-      } else {
-        unwrapLinksIntersecting(range, editingCell.td);
-      }
+      withHistory([{ r: editingCell.r, c: editingCell.c }], () => {
+        let node = range.commonAncestorContainer;
+        while (node && node !== editingCell.td && node.nodeName !== 'A') node = node.parentNode;
+        if (node && node.nodeName === 'A') {
+          const parent = node.parentNode;
+          while (node.firstChild) parent.insertBefore(node.firstChild, node);
+          parent.removeChild(node);
+          parent.normalize();
+        } else {
+          unwrapLinksIntersecting(range, editingCell.td);
+        }
+      });
       return;
     }
 
     if (editingCell) commitEdit();
-    forEachSelectedCell((td) => unwrapLinksIn(td));
+    withHistory(coordsForSelection(selection), () => {
+      forEachSelectedCell((td) => unwrapLinksIn(td));
+    });
     syncToolbarState();
   }
 
   function clearFormatting() {
     const range = activeEditingSelection();
     if (range) {
-      editingCell.td.focus();
-      restoreSelection(range);
-      document.execCommand('removeFormat');
-      const sel = window.getSelection();
-      unwrapLinksIntersecting(sel.rangeCount ? sel.getRangeAt(0) : range, editingCell.td);
+      withHistory([{ r: editingCell.r, c: editingCell.c }], () => {
+        editingCell.td.focus();
+        restoreSelection(range);
+        document.execCommand('removeFormat');
+        const sel = window.getSelection();
+        unwrapLinksIntersecting(sel.rangeCount ? sel.getRangeAt(0) : range, editingCell.td);
+      });
       return;
     }
 
     if (editingCell) commitEdit();
-    forEachSelectedCell((td) => {
-      td.style.cssText = '';
-      td.classList.remove('peaks-cell--wrap');
-      removeListMarkers(td);
-      unwrapLinksIn(td);
+    withHistory(coordsForSelection(selection), () => {
+      forEachSelectedCell((td) => {
+        td.style.cssText = '';
+        td.classList.remove('peaks-cell--wrap');
+        removeListMarkers(td);
+        unwrapLinksIn(td);
+      });
     });
     syncToolbarState();
   }
@@ -895,7 +1169,7 @@
       (topLeft.colSpan || 1) === (sel.c2 - sel.c1 + 1);
 
     if (alreadyThisMerge) {
-      unmergeCell(sel.r1, sel.c1);
+      withHistory(coordsForSelection(sel), () => unmergeCell(sel.r1, sel.c1));
       syncToolbarState();
       return;
     }
@@ -907,24 +1181,26 @@
     }
 
     if (editingCell) commitEdit();
-    unmergeOverlapping({ r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 });
+    withHistory(coordsForSelection(sel), () => {
+      unmergeOverlapping({ r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 });
 
-    const master = cellsEl[sel.r1][sel.c1];
-    for (let r = sel.r1; r <= sel.r2; r++) {
-      for (let c = sel.c1; c <= sel.c2; c++) {
-        if (r === sel.r1 && c === sel.c1) continue;
-        const slave = cellsEl[r][c];
-        slave.textContent = '';
-        slave.style.display = 'none';
-        slave.classList.add('peaks-cell--merge-slave');
+      const master = cellsEl[sel.r1][sel.c1];
+      for (let r = sel.r1; r <= sel.r2; r++) {
+        for (let c = sel.c1; c <= sel.c2; c++) {
+          if (r === sel.r1 && c === sel.c1) continue;
+          const slave = cellsEl[r][c];
+          slave.textContent = '';
+          slave.style.display = 'none';
+          slave.classList.add('peaks-cell--merge-slave');
+        }
       }
-    }
-    master.rowSpan = sel.r2 - sel.r1 + 1;
-    master.colSpan = sel.c2 - sel.c1 + 1;
-    master.classList.add('peaks-cell--merge-master');
-    master.style.textAlign = 'center';
-    master.style.verticalAlign = 'middle';
-    mergedMasters.add(sel.r1 + ',' + sel.c1);
+      master.rowSpan = sel.r2 - sel.r1 + 1;
+      master.colSpan = sel.c2 - sel.c1 + 1;
+      master.classList.add('peaks-cell--merge-master');
+      master.style.textAlign = 'center';
+      master.style.verticalAlign = 'middle';
+      mergedMasters.add(sel.r1 + ',' + sel.c1);
+    });
     syncToolbarState();
   }
 
