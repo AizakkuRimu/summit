@@ -347,7 +347,7 @@
       const dx = e.clientX - colResize.startX;
       const w = Math.max(MIN_COL_WIDTH, colResize.startWidth + dx);
       colWidths[colResize.c] = w;
-      colgroup.children[colResize.c].style.width = w + 'px';
+      colgroup.children[colResize.c + 1].style.width = w + 'px';
     } else if (rowResize) {
       const dy = e.clientY - rowResize.startY;
       const h = Math.max(MIN_ROW_HEIGHT, rowResize.startHeight + dy);
