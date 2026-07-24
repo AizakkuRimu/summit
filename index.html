@@ -321,10 +321,10 @@
           </button>
           <div class="peaks-ctxmenu__divider"></div>
           <button type="button" class="peaks-ctxmenu__item" data-ctx-action="paste-horizontal" role="menuitem">
-            <span class="peaks-ctxmenu__label">Paste table horizontally</span>
+            <span class="peaks-ctxmenu__label">Paste table horizontally</span><span class="peaks-ctxmenu__hint" data-ctx-hint="paste-horizontal"></span>
           </button>
           <button type="button" class="peaks-ctxmenu__item" data-ctx-action="paste-vertical" role="menuitem">
-            <span class="peaks-ctxmenu__label">Paste table vertically</span>
+            <span class="peaks-ctxmenu__label">Paste table vertically</span><span class="peaks-ctxmenu__hint" data-ctx-hint="paste-vertical"></span>
           </button>
           <div class="peaks-ctxmenu__divider"></div>
           <button type="button" class="peaks-ctxmenu__item" data-ctx-action="paste-autolink" role="menuitem">
@@ -334,6 +334,8 @@
             <span class="peaks-ctxmenu__label">Paste raw text (one cell)</span>
           </button>
         </div>
+
+        <div class="peaks-paste-hint" id="peaks-paste-hint" hidden></div>
 
       </div>
     </section>
