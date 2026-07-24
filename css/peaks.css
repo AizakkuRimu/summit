@@ -206,11 +206,16 @@ td.peaks-cell--wrap:not(.peaks-cell--editing) {
   text-overflow: clip;
 }
 
-td.peaks-cell--link {
+a.peaks-link {
   color: var(--bronze-deep, #7a4a24);
   text-decoration: underline;
+  cursor: pointer;
 }
 
 td.peaks-cell--merge-master {
   box-shadow: inset 0 0 0 1px var(--gray-line);
+}
+
+.peaks-list-marker {
+  white-space: pre;
 }
