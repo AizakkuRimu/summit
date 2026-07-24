@@ -128,6 +128,10 @@ th.peaks-colhead {
   white-space: nowrap;
 }
 
+.peaks-rowhead-col {
+  width: 44px;
+}
+
 th.peaks-rowhead {
   left: 0;
   z-index: 2;
