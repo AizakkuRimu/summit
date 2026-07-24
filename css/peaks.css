@@ -240,3 +240,79 @@ td.peaks-cell--merge-master {
 .peaks-list-marker {
   white-space: pre;
 }
+
+/* ---------- Right-click context menu ---------- */
+
+.peaks-ctxmenu {
+  position: fixed;
+  z-index: 50;
+  min-width: 220px;
+  background: var(--stone-raised);
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  color: var(--ink);
+  user-select: none;
+}
+
+.peaks-ctxmenu[hidden] {
+  display: none;
+}
+
+.peaks-ctxmenu__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.peaks-ctxmenu__item:hover,
+.peaks-ctxmenu__item:focus-visible {
+  background: var(--bronze-soft);
+  color: var(--bronze-deep);
+  outline: none;
+}
+
+.peaks-ctxmenu__item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.peaks-ctxmenu__item:disabled:hover {
+  background: transparent;
+  color: inherit;
+}
+
+.peaks-ctxmenu__label {
+  white-space: nowrap;
+}
+
+.peaks-ctxmenu__hint {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  color: var(--gray);
+  white-space: nowrap;
+}
+
+.peaks-ctxmenu__item:hover .peaks-ctxmenu__hint,
+.peaks-ctxmenu__item:focus-visible .peaks-ctxmenu__hint {
+  color: var(--bronze-deep);
+}
+
+.peaks-ctxmenu__divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--gray-line);
+}
