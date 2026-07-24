@@ -260,9 +260,10 @@
 
     const td = e.target.closest('td.peaks-cell');
     if (td) {
-      if ((e.ctrlKey || e.metaKey) && td.dataset.href) {
+      const linkEl = e.target.closest('a.peaks-link');
+      if ((e.ctrlKey || e.metaKey) && linkEl) {
         e.preventDefault();
-        window.open(td.dataset.href, '_blank', 'noopener');
+        window.open(linkEl.getAttribute('href'), '_blank', 'noopener');
         return;
       }
       if (editingCell && editingCell.td !== td) commitEdit();
@@ -465,6 +466,16 @@
   // ============================================================
   // Text formatting (bold/italic/underline/strike, size, colour,
   // case, alignment, wrap, merge, lists, links, clear-format)
+  //
+  // Design: bold/italic/underline/strike/size/colour/case/links all
+  // apply to just the highlighted text when the user has an active
+  // text selection inside a cell that's being edited. With no
+  // highlight (including "just clicked the cell"), they apply to
+  // the whole cell instead — the previous behaviour.
+  //
+  // Alignment, wrap, and merge stay whole-cell only everywhere,
+  // since — same as in Excel — those are properties of the cell
+  // itself, not of a run of text within it.
   // ============================================================
 
   const DEFAULT_FONT_SIZE = 12.5; // matches .peaks-grid base font-size in peaks.css
@@ -502,42 +513,144 @@
     return td.style.fontSize ? parseFloat(td.style.fontSize) : DEFAULT_FONT_SIZE;
   }
 
+  // ---------- Highlighted-text-vs-whole-cell plumbing ----------
+
+  let savedRange = null; // last non-empty text selection seen inside the cell being edited
+
+  document.addEventListener('selectionchange', () => {
+    if (!editingCell) { savedRange = null; return; }
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount && !sel.isCollapsed) {
+      const r = sel.getRangeAt(0);
+      if (editingCell.td.contains(r.commonAncestorContainer)) savedRange = r.cloneRange();
+    }
+    syncToolbarState();
+  });
+
+  function activeEditingSelection() {
+    if (!editingCell) return null;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount && !sel.isCollapsed) {
+      const r = sel.getRangeAt(0);
+      if (editingCell.td.contains(r.commonAncestorContainer)) return r;
+    }
+    // Fall back to the last highlighted range in this cell, in case focus
+    // moved to a toolbar control (e.g. opening the colour picker) and the
+    // browser cleared the live selection as a result.
+    if (savedRange && editingCell.td.contains(savedRange.commonAncestorContainer)) return savedRange;
+    return null;
+  }
+
+  function restoreSelection(range) {
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  // Runs `runFn(range)` against the current text highlight inside an
+  // editing cell if one exists, otherwise runs `cellFn()` against the
+  // whole selected cell(s).
+  function withRunOrCell(runFn, cellFn) {
+    const range = activeEditingSelection();
+    if (range) {
+      editingCell.td.focus();
+      restoreSelection(range);
+      runFn(range);
+      editingCell.td.normalize();
+    } else {
+      cellFn();
+    }
+    syncToolbarState();
+  }
+
+  function transformRangeText(range, fn) {
+    if (range.startContainer.nodeType === Node.TEXT_NODE && range.startOffset > 0) {
+      range.setStart(range.startContainer.splitText(range.startOffset), 0);
+    }
+    if (range.endContainer.nodeType === Node.TEXT_NODE && range.endOffset < range.endContainer.length) {
+      range.endContainer.splitText(range.endOffset);
+    }
+    const root = range.commonAncestorContainer;
+    const nodes = [];
+    if (root.nodeType === Node.TEXT_NODE) {
+      nodes.push(root);
+    } else {
+      (function collect(node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          if (range.intersectsNode(node)) nodes.push(node);
+        } else {
+          node.childNodes.forEach(collect);
+        }
+      })(root);
+    }
+    nodes.forEach((node) => { node.nodeValue = fn(node.nodeValue); });
+  }
+
+  function transformAllTextIn(el, fn) {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let n;
+    while ((n = walker.nextNode())) nodes.push(n);
+    nodes.forEach((node) => { node.nodeValue = fn(node.nodeValue); });
+  }
+
+  function wrapRangeStyle(range, prop, value) {
+    const span = document.createElement('span');
+    span.style[prop] = value;
+    try {
+      range.surroundContents(span);
+    } catch (e) {
+      const frag = range.extractContents();
+      span.appendChild(frag);
+      range.insertNode(span);
+    }
+    const newRange = document.createRange();
+    newRange.selectNodeContents(span);
+    restoreSelection(newRange);
+    savedRange = newRange.cloneRange();
+  }
+
+  function currentRunFontSize(range) {
+    const node = range.startContainer;
+    const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    return (el && parseFloat(window.getComputedStyle(el).fontSize)) || DEFAULT_FONT_SIZE;
+  }
+
+  // ---------- Cell-level style helpers (used as the "no highlight" fallback) ----------
+
   function toggleCellStyle(prop, onValue) {
     const p = primaryTd();
     if (!p) return;
+    if (editingCell) commitEdit();
     const turnOn = p.style[prop] !== onValue;
     forEachSelectedCell((td) => { td.style[prop] = turnOn ? onValue : ''; });
-    syncToolbarState();
   }
 
   function toggleDecoration(kind) {
     const p = primaryTd();
     if (!p) return;
+    if (editingCell) commitEdit();
     const has = currentDecorations(p).includes(kind);
     forEachSelectedCell((td) => {
       const decos = currentDecorations(td).filter((d) => d !== kind);
       if (!has) decos.push(kind);
       td.style.textDecorationLine = decos.join(' ');
     });
-    syncToolbarState();
   }
 
-  function setFontSize(px) {
+  function setCellFontSize(px) {
     px = Math.max(6, Math.min(96, Math.round(px)));
+    if (editingCell) commitEdit();
     forEachSelectedCell((td) => { td.style.fontSize = px + 'px'; });
-    syncToolbarState();
   }
 
-  function bumpFontSize(delta) {
+  function bumpCellFontSize(delta) {
     const p = primaryTd();
     if (!p) return;
-    setFontSize(getFontSizePx(p) + delta);
+    setCellFontSize(getFontSizePx(p) + delta);
   }
 
-  function transformCase(fn) {
-    if (editingCell) commitEdit();
-    forEachSelectedCell((td) => { td.textContent = fn(td.textContent); });
-  }
+  // ---------- Alignment / wrap (always whole-cell) ----------
 
   function setHAlign(value) {
     forEachSelectedCell((td) => { td.style.textAlign = value; });
@@ -563,61 +676,182 @@
     syncToolbarState();
   }
 
+  // ---------- Lists (whole-cell — a bullet/number is a line-level thing,
+  // not a run-of-text thing, so this one stays cell-scoped even when
+  // text is highlighted). Uses dedicated marker spans rather than
+  // rewriting textContent, so any links or styled runs already in the
+  // cell survive untouched. ----------
+
+  function collectLineStarts(td) {
+    const starts = [];
+    let atLineStart = true;
+    const walker = document.createTreeWalker(td, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      if (!node.parentElement || !node.parentElement.closest('.peaks-list-marker')) {
+        const text = node.nodeValue;
+        if (atLineStart) { starts.push({ node, idx: 0 }); atLineStart = false; }
+        let searchFrom = 0, nlIdx;
+        while ((nlIdx = text.indexOf('\n', searchFrom)) !== -1) {
+          if (nlIdx + 1 < text.length) {
+            starts.push({ node, idx: nlIdx + 1 });
+            searchFrom = nlIdx + 1;
+          } else {
+            atLineStart = true;
+            searchFrom = nlIdx + 1;
+          }
+        }
+      }
+      node = walker.nextNode();
+    }
+    return starts;
+  }
+
+  function removeListMarkers(td) {
+    td.querySelectorAll('span.peaks-list-marker').forEach((m) => m.remove());
+  }
+
+  function addListMarkers(td, kind) {
+    const starts = collectLineStarts(td);
+    starts.forEach((s, i) => { s.number = i + 1; });
+    for (let i = starts.length - 1; i >= 0; i--) {
+      const { node, idx, number } = starts[i];
+      const targetNode = idx > 0 ? node.splitText(idx) : node;
+      const marker = document.createElement('span');
+      marker.className = 'peaks-list-marker';
+      marker.dataset.kind = kind;
+      marker.textContent = kind === 'bullet' ? '\u2022 ' : number + '. ';
+      targetNode.parentNode.insertBefore(marker, targetNode);
+    }
+  }
+
   function toggleList(kind) {
     if (editingCell) commitEdit();
-    const bulletRe = /^•\s/;
-    const numberRe = /^\d+\.\s/;
     forEachSelectedCell((td) => {
-      const lines = td.textContent.split('\n');
-      const stripped = lines.map((line) => line.replace(bulletRe, '').replace(numberRe, ''));
-      const alreadyThisKind = lines.some((l) => l.trim()) &&
-        lines.every((line) => !line.trim() || (kind === 'bullet' ? bulletRe.test(line) : numberRe.test(line)));
-      if (alreadyThisKind) {
-        td.textContent = stripped.join('\n');
-      } else {
-        let n = 0;
-        td.textContent = stripped.map((line) => {
-          if (!line.trim()) return line;
-          n++;
-          return (kind === 'bullet' ? '• ' : n + '. ') + line;
-        }).join('\n');
-        td.classList.add('peaks-cell--wrap');
-      }
+      const existingMarker = td.querySelector('span.peaks-list-marker');
+      const existingKind = existingMarker ? existingMarker.dataset.kind : null;
+      removeListMarkers(td);
+      if (existingKind === kind) return; // was already this kind — toggle off
+      addListMarkers(td, kind);
+      td.classList.add('peaks-cell--wrap');
     });
     syncToolbarState();
   }
 
+  // ---------- Links ----------
+
+  function unwrapLinksIn(td) {
+    td.querySelectorAll('a.peaks-link').forEach((a) => {
+      const parent = a.parentNode;
+      while (a.firstChild) parent.insertBefore(a.firstChild, a);
+      parent.removeChild(a);
+    });
+    td.normalize();
+  }
+
+  function unwrapLinksIntersecting(range, root) {
+    Array.from(root.querySelectorAll('a.peaks-link')).forEach((a) => {
+      if (range.intersectsNode(a)) {
+        const parent = a.parentNode;
+        while (a.firstChild) parent.insertBefore(a.firstChild, a);
+        parent.removeChild(a);
+      }
+    });
+    root.normalize();
+  }
+
+  function makeLinkEl(url) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.className = 'peaks-link';
+    return a;
+  }
+
   function insertLink() {
+    const range = activeEditingSelection();
+
+    if (range) {
+      // Highlighted text inside the cell being edited — link just that text.
+      const url = window.prompt('Enter URL for the highlighted text:', 'https://');
+      if (!url) return;
+      editingCell.td.focus();
+      restoreSelection(range);
+      const a = makeLinkEl(url);
+      try {
+        range.surroundContents(a);
+      } catch (e) {
+        const frag = range.extractContents();
+        a.appendChild(frag);
+        range.insertNode(a);
+      }
+      editingCell.td.normalize();
+      return;
+    }
+
+    // No active text highlight — link the whole cell(s), as before.
     const p = primaryTd();
     if (!p) return;
-    const existing = p.dataset.href || 'https://';
+    const existingLink = p.querySelector('a.peaks-link');
+    const existing = existingLink ? existingLink.getAttribute('href') : 'https://';
     const url = window.prompt('Enter URL for the selected cell(s):', existing);
     if (!url) return;
+    if (editingCell) commitEdit();
     forEachSelectedCell((td) => {
-      td.dataset.href = url;
-      td.classList.add('peaks-cell--link');
+      unwrapLinksIn(td);
+      const text = td.textContent;
+      td.textContent = '';
+      const a = makeLinkEl(url);
+      a.textContent = text;
+      td.appendChild(a);
     });
     syncToolbarState();
   }
 
   function removeLink() {
-    forEachSelectedCell((td) => {
-      delete td.dataset.href;
-      td.classList.remove('peaks-cell--link');
-    });
+    const range = activeEditingSelection();
+    if (range) {
+      let node = range.commonAncestorContainer;
+      while (node && node !== editingCell.td && node.nodeName !== 'A') node = node.parentNode;
+      if (node && node.nodeName === 'A') {
+        const parent = node.parentNode;
+        while (node.firstChild) parent.insertBefore(node.firstChild, node);
+        parent.removeChild(node);
+        parent.normalize();
+      } else {
+        unwrapLinksIntersecting(range, editingCell.td);
+      }
+      return;
+    }
+
+    if (editingCell) commitEdit();
+    forEachSelectedCell((td) => unwrapLinksIn(td));
     syncToolbarState();
   }
 
   function clearFormatting() {
+    const range = activeEditingSelection();
+    if (range) {
+      editingCell.td.focus();
+      restoreSelection(range);
+      document.execCommand('removeFormat');
+      const sel = window.getSelection();
+      unwrapLinksIntersecting(sel.rangeCount ? sel.getRangeAt(0) : range, editingCell.td);
+      return;
+    }
+
+    if (editingCell) commitEdit();
     forEachSelectedCell((td) => {
       td.style.cssText = '';
-      td.classList.remove('peaks-cell--wrap', 'peaks-cell--link');
-      delete td.dataset.href;
+      td.classList.remove('peaks-cell--wrap');
+      removeListMarkers(td);
+      unwrapLinksIn(td);
     });
     syncToolbarState();
   }
 
-  // ---------- Merge & centre ----------
+  // ---------- Merge & centre (always whole-cell) ----------
 
   function rectOverlap(a, b) {
     return a.r1 <= b.r2 && a.r2 >= b.r1 && a.c1 <= b.c2 && a.c2 >= b.c1;
@@ -700,18 +934,34 @@
     const p = primaryTd();
     if (!p) return;
 
-    setPressed(boldBtn, p.style.fontWeight === 'bold');
-    setPressed(italicBtn, p.style.fontStyle === 'italic');
-    const decos = currentDecorations(p);
-    setPressed(underlineBtn, decos.includes('underline'));
-    setPressed(strikeBtn, decos.includes('line-through'));
+    const range = activeEditingSelection();
+    if (range) {
+      setPressed(boldBtn, document.queryCommandState('bold'));
+      setPressed(italicBtn, document.queryCommandState('italic'));
+      setPressed(underlineBtn, document.queryCommandState('underline'));
+      setPressed(strikeBtn, document.queryCommandState('strikeThrough'));
+      const node = range.startContainer;
+      const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+      if (el) {
+        const cs = window.getComputedStyle(el);
+        if (fontSizeInput) fontSizeInput.value = Math.round(parseFloat(cs.fontSize));
+        const hex = rgbToHex(cs.color);
+        if (hex && forecolorInput) forecolorInput.value = hex;
+        if (forecolorGlyph) forecolorGlyph.style.color = hex || forecolorInput.value;
+      }
+    } else {
+      setPressed(boldBtn, p.style.fontWeight === 'bold');
+      setPressed(italicBtn, p.style.fontStyle === 'italic');
+      const decos = currentDecorations(p);
+      setPressed(underlineBtn, decos.includes('underline'));
+      setPressed(strikeBtn, decos.includes('line-through'));
+      if (fontSizeInput) fontSizeInput.value = Math.round(getFontSizePx(p));
+      const hex = rgbToHex(p.style.color);
+      if (hex && forecolorInput) forecolorInput.value = hex;
+      if (forecolorGlyph) forecolorGlyph.style.color = hex || forecolorInput.value;
+    }
 
-    if (fontSizeInput) fontSizeInput.value = Math.round(getFontSizePx(p));
-
-    const hex = rgbToHex(p.style.color);
-    if (hex && forecolorInput) { forecolorInput.value = hex; }
-    if (forecolorGlyph) forecolorGlyph.style.color = hex || forecolorInput.value;
-
+    // Alignment / wrap / merge always reflect the cell itself.
     const hAlign = p.style.textAlign || 'left';
     document.querySelectorAll('[data-peaks-halign]').forEach((btn) => {
       btn.classList.toggle('is-active', btn.dataset.peaksHalign === hAlign);
@@ -720,40 +970,101 @@
     document.querySelectorAll('[data-peaks-valign]').forEach((btn) => {
       btn.classList.toggle('is-active', btn.dataset.peaksValign === vAlign);
     });
-
     setPressed(wrapBtn, p.classList.contains('peaks-cell--wrap'));
     setPressed(mergeBtn, primaryCell ? mergedMasters.has(primaryCell.r + ',' + primaryCell.c) : false);
   }
 
   // ---------- Wire up buttons ----------
 
-  if (boldBtn) boldBtn.addEventListener('click', () => toggleCellStyle('fontWeight', 'bold'));
-  if (italicBtn) italicBtn.addEventListener('click', () => toggleCellStyle('fontStyle', 'italic'));
-  if (underlineBtn) underlineBtn.addEventListener('click', () => toggleDecoration('underline'));
-  if (strikeBtn) strikeBtn.addEventListener('click', () => toggleDecoration('line-through'));
+  // Prevent toolbar buttons from stealing focus away from a cell being
+  // edited — otherwise clicking, say, Bold would collapse/clear the text
+  // highlight before the click handler even runs.
+  document.querySelectorAll('.peaks-toolbar button').forEach((btn) => {
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+  });
+
+  if (boldBtn) {
+    boldBtn.addEventListener('click', () => withRunOrCell(
+      () => document.execCommand('bold'),
+      () => toggleCellStyle('fontWeight', 'bold')
+    ));
+  }
+  if (italicBtn) {
+    italicBtn.addEventListener('click', () => withRunOrCell(
+      () => document.execCommand('italic'),
+      () => toggleCellStyle('fontStyle', 'italic')
+    ));
+  }
+  if (underlineBtn) {
+    underlineBtn.addEventListener('click', () => withRunOrCell(
+      () => document.execCommand('underline'),
+      () => toggleDecoration('underline')
+    ));
+  }
+  if (strikeBtn) {
+    strikeBtn.addEventListener('click', () => withRunOrCell(
+      () => document.execCommand('strikeThrough'),
+      () => toggleDecoration('line-through')
+    ));
+  }
 
   if (forecolorInput) {
+    // Live swatch preview only — the actual colour is applied on 'change'
+    // (see below) so we don't yank focus away mid-drag in the picker.
     forecolorInput.addEventListener('input', () => {
       if (forecolorGlyph) forecolorGlyph.style.color = forecolorInput.value;
-      forEachSelectedCell((td) => { td.style.color = forecolorInput.value; });
+    });
+    forecolorInput.addEventListener('change', () => {
+      withRunOrCell(
+        () => document.execCommand('foreColor', false, forecolorInput.value),
+        () => {
+          if (editingCell) commitEdit();
+          forEachSelectedCell((td) => { td.style.color = forecolorInput.value; });
+        }
+      );
     });
   }
 
   const fsDecrease = document.getElementById('peaks-fontsize-decrease');
   const fsIncrease = document.getElementById('peaks-fontsize-increase');
-  if (fsDecrease) fsDecrease.addEventListener('click', () => bumpFontSize(-1));
-  if (fsIncrease) fsIncrease.addEventListener('click', () => bumpFontSize(1));
+  if (fsDecrease) {
+    fsDecrease.addEventListener('click', () => withRunOrCell(
+      (range) => wrapRangeStyle(range, 'fontSize', Math.max(6, Math.min(96, Math.round(currentRunFontSize(range) - 1))) + 'px'),
+      () => bumpCellFontSize(-1)
+    ));
+  }
+  if (fsIncrease) {
+    fsIncrease.addEventListener('click', () => withRunOrCell(
+      (range) => wrapRangeStyle(range, 'fontSize', Math.max(6, Math.min(96, Math.round(currentRunFontSize(range) + 1))) + 'px'),
+      () => bumpCellFontSize(1)
+    ));
+  }
   if (fontSizeInput) {
     fontSizeInput.addEventListener('change', () => {
       const v = parseFloat(fontSizeInput.value);
-      if (!isNaN(v)) setFontSize(v);
+      if (isNaN(v)) return;
+      const px = Math.max(6, Math.min(96, Math.round(v)));
+      withRunOrCell(
+        (range) => wrapRangeStyle(range, 'fontSize', px + 'px'),
+        () => setCellFontSize(px)
+      );
     });
   }
 
   const upperBtn = document.getElementById('peaks-uppercase');
   const lowerBtn = document.getElementById('peaks-lowercase');
-  if (upperBtn) upperBtn.addEventListener('click', () => transformCase((s) => s.toUpperCase()));
-  if (lowerBtn) lowerBtn.addEventListener('click', () => transformCase((s) => s.toLowerCase()));
+  if (upperBtn) {
+    upperBtn.addEventListener('click', () => withRunOrCell(
+      (range) => transformRangeText(range, (s) => s.toUpperCase()),
+      () => { if (editingCell) commitEdit(); forEachSelectedCell((td) => transformAllTextIn(td, (s) => s.toUpperCase())); }
+    ));
+  }
+  if (lowerBtn) {
+    lowerBtn.addEventListener('click', () => withRunOrCell(
+      (range) => transformRangeText(range, (s) => s.toLowerCase()),
+      () => { if (editingCell) commitEdit(); forEachSelectedCell((td) => transformAllTextIn(td, (s) => s.toLowerCase())); }
+    ));
+  }
 
   document.querySelectorAll('[data-peaks-halign]').forEach((btn) => {
     btn.addEventListener('click', () => setHAlign(btn.dataset.peaksHalign));
