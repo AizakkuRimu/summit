@@ -121,3 +121,116 @@ body {
 .summit-select:hover {
   border-color: var(--bronze);
 }
+
+/* ---------- Save & Exit ---------- */
+
+.summit-btn--save-exit {
+  border-color: var(--gray-line);
+}
+
+/* ---------- Batch export controls ---------- */
+
+.summit-batch-group__label {
+  color: var(--gray);
+}
+
+.summit-batch-group__custom {
+  background: var(--stone);
+  color: var(--ink);
+  border-color: var(--gray-line);
+}
+
+.summit-batch-group__custom:hover {
+  border-color: var(--bronze);
+}
+
+/* ---------- Import modal ---------- */
+
+.summit-modal__backdrop {
+  background: rgba(36, 33, 29, 0.45);
+}
+
+[data-theme="dark"] .summit-modal__backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.summit-modal__panel {
+  background: var(--stone-raised);
+  border: 1px solid var(--gray-line);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.28);
+  color: var(--ink);
+}
+
+.summit-modal__close {
+  color: var(--gray);
+}
+
+.summit-modal__close:hover {
+  color: var(--ink);
+  background: var(--bronze-soft);
+}
+
+.summit-modal__tab {
+  color: var(--gray);
+}
+
+.summit-modal__tab:hover {
+  color: var(--ink);
+  background: var(--bronze-soft);
+}
+
+.summit-modal__tab.is-active {
+  color: var(--bronze-deep);
+  background: var(--bronze-soft);
+}
+
+.summit-modal__warning {
+  background: var(--bronze-soft);
+  color: var(--bronze-deep);
+}
+
+.summit-modal__filelabel {
+  border-color: var(--gray-line);
+  color: var(--gray);
+  background: var(--stone);
+}
+
+.summit-modal__filelabel:hover {
+  border-color: var(--bronze);
+  color: var(--ink);
+}
+
+.summit-modal__preview-label {
+  color: var(--bronze);
+}
+
+.summit-modal__preview {
+  border-color: var(--gray-line);
+  background: var(--stone);
+  color: var(--ink);
+}
+
+.summit-modal__preview:empty::before {
+  color: var(--gray);
+}
+
+.summit-modal__table td {
+  border-color: var(--gray-line);
+}
+
+.summit-modal__status--error {
+  color: var(--bronze-deep);
+  font-weight: 600;
+}
+
+.summit-modal__note {
+  color: var(--gray);
+}
+
+/* ---------- Toast ---------- */
+
+.summit-toast {
+  background: var(--ink);
+  color: var(--stone-raised);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
