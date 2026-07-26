@@ -973,12 +973,58 @@
   renumberPages();
   updateEmptyState(pages[0].body);
 
-  // Small helper surface for later sections (export in Section 4,
-  // reverse/deep-thinking search in Section 7) to read document content
-  // without needing to know about the pagination internals.
+  // Helper surface for other sections (data lifecycle & export/import in
+  // Section 4, reverse/deep-thinking search in Section 7) to read and
+  // write document content without needing to know about the
+  // pagination internals.
   window.Summit = window.Summit || { state: { mountain: {}, peaks: {}, draft: {} } };
   window.Summit.mountain = {
     getHTML: () => pages.map((p) => p.body.innerHTML).join(''),
-    getPlainText: () => pages.map((p) => p.body.textContent).join('\n\n')
+    getPlainText: () => pages.map((p) => p.body.textContent).join('\n\n'),
+
+    // One HTML string per page, in order — used by batch export (4.3+)
+    // to split the document into page-range chunks.
+    getPagesHTML: () => pages.map((p) => p.body.innerHTML),
+    getPageCount: () => pages.length,
+
+    // True when the document has no typed content and no links/images/
+    // list items — used to skip export/auto-download on an unused tab.
+    isEmpty: () => pages.length <= 1 && pages[0].body.classList.contains('is-empty'),
+
+    // Replaces the entire document with the given HTML (Section 4.4
+    // import — file upload or paste). Collapses back to one page and
+    // lets the normal pagination engine reflow the new content across
+    // as many pages as it needs.
+    loadHTML: (html) => {
+      while (pages.length > 1) {
+        const last = pages.pop();
+        pagesContainer.removeChild(last.el);
+      }
+      const first = pages[0] || ensurePage(0);
+
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = html || '';
+
+      // The pagination engine moves whole top-level children between
+      // pages, so bare inline/text content (no wrapping block element)
+      // wouldn't have anything to move — wrap it in a single paragraph.
+      const hasBlockChild = Array.from(wrapper.children).some((el) =>
+        ['P', 'DIV', 'UL', 'OL', 'TABLE', 'H1', 'H2', 'H3', 'BLOCKQUOTE'].includes(el.tagName));
+      if (!hasBlockChild) {
+        const p = document.createElement('p');
+        p.innerHTML = wrapper.innerHTML || '<br>';
+        wrapper.innerHTML = '';
+        wrapper.appendChild(p);
+      }
+
+      first.body.innerHTML = wrapper.innerHTML;
+      if (!first.body.firstElementChild) {
+        const p = document.createElement('p');
+        p.appendChild(document.createElement('br'));
+        first.body.appendChild(p);
+      }
+      updateEmptyState(first.body);
+      repaginate();
+    }
   };
 })();

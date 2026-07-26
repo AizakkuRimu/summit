@@ -1631,4 +1631,77 @@
   syncToolbarState();
   updateHistoryButtons();
   if (clipTrap) clipTrap.focus({ preventScroll: true });
+
+  // ============================================================
+  // Data lifecycle & export/import hooks (Section 4)
+  // ============================================================
+
+  // Bounding box of cells that actually hold text, 0-indexed and
+  // exclusive-safe (rows/cols are *counts*, so a sheet with data only
+  // in A1 reports { rows: 1, cols: 1 }). Ignores styling-only cells —
+  // matches "sheet has no data" the way a spreadsheet user would mean it.
+  function getUsedRange() {
+    let maxR = -1, maxC = -1;
+    for (let r = 0; r < numRows; r++) {
+      for (let c = 0; c < numCols; c++) {
+        if (cellsEl[r][c].textContent.trim() !== '') {
+          if (r > maxR) maxR = r;
+          if (c > maxC) maxC = c;
+        }
+      }
+    }
+    return { rows: maxR + 1, cols: maxC + 1 };
+  }
+
+  // Plain-text values for a rectangular range (inclusive), row-major —
+  // the shape both the .xlsx export and batch export slice from.
+  function getMatrix(r1, r2, c1, c2) {
+    const out = [];
+    for (let r = r1; r <= r2; r++) {
+      const row = [];
+      for (let c = c1; c <= c2; c++) row.push(cellsEl[r][c] ? cellsEl[r][c].textContent : '');
+      out.push(row);
+    }
+    return out;
+  }
+
+  // Resets every allocated cell to its default state (content, styling,
+  // merges) without shrinking the grid, and drops undo/redo history —
+  // a fresh import shouldn't let Ctrl+Z resurrect the sheet it replaced.
+  function clearGrid() {
+    Array.from(mergedMasters).forEach((key) => {
+      const [r, c] = key.split(',').map(Number);
+      unmergeCell(r, c);
+    });
+    for (let r = 0; r < numRows; r++) {
+      for (let c = 0; c < numCols; c++) {
+        const td = cellsEl[r][c];
+        td.textContent = '';
+        td.removeAttribute('style');
+        td.className = 'peaks-cell';
+        td.rowSpan = 1;
+        td.colSpan = 1;
+      }
+    }
+    undoStack = [];
+    redoStack = [];
+    updateHistoryButtons();
+  }
+
+  window.Summit = window.Summit || { state: { mountain: {}, peaks: {}, draft: {} } };
+  window.Summit.peaks = {
+    getUsedRange,
+    getMatrix,
+
+    // True when no cell anywhere on the sheet holds text — used to skip
+    // export/auto-download on an unused tab.
+    isEmpty: () => getUsedRange().rows === 0,
+
+    // Replaces the whole sheet with a 2D array of string values
+    // (Section 4.4 import — file upload or paste; rows may be ragged).
+    loadFromMatrix: (matrix) => {
+      clearGrid();
+      if (matrix && matrix.length) pasteMatrix(0, 0, matrix);
+    }
+  };
 })();
