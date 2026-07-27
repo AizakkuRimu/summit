@@ -11,6 +11,14 @@
 
    (3.3 data lifecycle/import-export hooks land with Section 4.)
 
+   Section 9 (future development, built early): Smart Sub-Enquiry
+   suggestions. Selecting a single cell reads the cell immediately to
+   its left and, if Draft has any tagged Sub-Enquiries, shows the
+   closest keyword matches in a small popover. Picking one turns the
+   current cell into an internal link back to that Sub-Enquiry in the
+   Draft tab, reusing the existing peaks-link machinery (Section 2.4 /
+   6.2) rather than inventing a second link type.
+
    Content lives directly in the DOM under #peaks-grid, which
    sits inside the (hidden-not-removed) Peaks panel — so
    switching tabs (Section 1) never loses this tab's work.
@@ -42,6 +50,10 @@
   const clipTrap = document.getElementById('peaks-clip-trap');
   const undoBtn = document.getElementById('peaks-undo');
   const redoBtn = document.getElementById('peaks-redo');
+  const suggestBox = document.getElementById('peaks-suggest');
+  const suggestList = document.getElementById('peaks-suggest-list');
+  const suggestSourceEl = document.getElementById('peaks-suggest-source');
+  const suggestDismissBtn = document.getElementById('peaks-suggest-dismiss');
 
   let numRows = 0;
   let numCols = 0;
@@ -188,6 +200,7 @@
     cellsEl[r1][c1].classList.add('peaks-cell--primary');
     updateCellRef();
     syncToolbarState();
+    updateSmartSuggestions();
   }
 
   function primaryTd() {
@@ -358,6 +371,7 @@
     if (editingCell) commitEdit();
     const td = cellsEl[r][c];
     editingCell = { r, c, td, previousValue: td.textContent, beforeSnapshot: snapshotCell(r, c) };
+    hideSuggestions();
     td.contentEditable = 'true';
     td.classList.add('peaks-cell--editing');
     if (opts.clear) td.textContent = opts.char || '';
@@ -408,7 +422,13 @@
       const linkEl = e.target.closest('a.peaks-link');
       if ((e.ctrlKey || e.metaKey) && linkEl) {
         e.preventDefault();
-        window.open(linkEl.getAttribute('href'), '_blank', 'noopener');
+        const subId = linkEl.dataset.subenquiryId;
+        if (subId) {
+          const draftApi = window.Summit && window.Summit.draft;
+          if (draftApi && typeof draftApi.focusSubEnquiry === 'function') draftApi.focusSubEnquiry(subId);
+        } else {
+          window.open(linkEl.getAttribute('href'), '_blank', 'noopener');
+        }
         return;
       }
       // While actively editing this exact cell, leave the mouse alone —
@@ -1346,6 +1366,118 @@
     });
     syncToolbarState();
   }
+
+  // ============================================================
+  // Section 9 (built early) — Smart Sub-Enquiry suggestions
+  //
+  // Selecting a single cell reads the cell to its left and asks the
+  // Draft tab (window.Summit.draft) for the closest-matching
+  // Sub-Enquiries by keyword overlap. Picking a suggestion links the
+  // current cell to that Sub-Enquiry using the same a.peaks-link
+  // markup as a normal hyperlink, just flagged as internal via
+  // data-subenquiry-id so a click can jump into Draft instead of
+  // opening a URL.
+  // ============================================================
+
+  let suggestMatches = [];
+
+  function hideSuggestions() {
+    if (!suggestBox) return;
+    suggestBox.hidden = true;
+    suggestMatches = [];
+  }
+
+  function positionSuggestBox(td) {
+    const rect = td.getBoundingClientRect();
+    suggestBox.hidden = false;
+    const boxRect = suggestBox.getBoundingClientRect();
+    let left = rect.left;
+    let top = rect.bottom + 4;
+    left = Math.max(8, Math.min(left, window.innerWidth - boxRect.width - 8));
+    top = Math.min(top, window.innerHeight - boxRect.height - 8);
+    suggestBox.style.left = left + 'px';
+    suggestBox.style.top = top + 'px';
+  }
+
+  function applySuggestion(match) {
+    const td = primaryTd();
+    if (!td || !primaryCell) return;
+    if (editingCell) commitEdit();
+    withHistory([{ r: primaryCell.r, c: primaryCell.c }], () => {
+      unwrapLinksIn(td);
+      const label = td.textContent.trim() || match.name;
+      td.textContent = '';
+      const a = makeLinkEl('#');
+      a.removeAttribute('target');
+      a.classList.add('peaks-link--internal');
+      a.dataset.subenquiryId = match.id;
+      a.title = 'Sub-Enquiry: ' + match.path + (match.hasTemplate ? '' : ' (no template attached yet)');
+      a.textContent = label;
+      td.appendChild(a);
+    });
+    hideSuggestions();
+    syncToolbarState();
+  }
+
+  function renderSuggestions(leftText) {
+    if (!suggestBox || !suggestList) return;
+    suggestList.innerHTML = '';
+    suggestMatches.forEach((match) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'peaks-suggest__item';
+      item.setAttribute('role', 'option');
+
+      const name = document.createElement('span');
+      name.className = 'peaks-suggest__name';
+      name.textContent = match.name;
+      item.appendChild(name);
+
+      const path = document.createElement('span');
+      path.className = 'peaks-suggest__path';
+      path.textContent = match.path;
+      item.appendChild(path);
+
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        applySuggestion(match);
+      });
+      suggestList.appendChild(item);
+    });
+    if (suggestSourceEl) suggestSourceEl.textContent = leftText;
+    positionSuggestBox(primaryTd());
+  }
+
+  function updateSmartSuggestions() {
+    if (!suggestBox) return;
+    if (editingCell || isSelecting) { hideSuggestions(); return; }
+    if (!selection || selection.r1 !== selection.r2 || selection.c1 !== selection.c2) { hideSuggestions(); return; }
+    const { r, c } = selection;
+    if (c === 0) { hideSuggestions(); return; }
+
+    const draftApi = window.Summit && window.Summit.draft;
+    if (!draftApi || typeof draftApi.matchSubEnquiries !== 'function') { hideSuggestions(); return; }
+
+    const leftTd = cellsEl[r][c - 1];
+    const leftText = leftTd ? leftTd.textContent.trim() : '';
+    if (!leftText) { hideSuggestions(); return; }
+
+    const matches = draftApi.matchSubEnquiries(leftText, 3);
+    if (!matches.length) { hideSuggestions(); return; }
+
+    suggestMatches = matches;
+    renderSuggestions(leftText);
+  }
+
+  if (suggestDismissBtn) suggestDismissBtn.addEventListener('click', hideSuggestions);
+  scrollEl.addEventListener('scroll', hideSuggestions);
+  window.addEventListener('resize', hideSuggestions);
+  window.addEventListener('blur', hideSuggestions);
+  document.addEventListener('click', (e) => {
+    if (suggestBox && !suggestBox.hidden && !suggestBox.contains(e.target) && !e.target.closest('td.peaks-cell')) {
+      hideSuggestions();
+    }
+  });
 
   function clearFormatting() {
     const range = activeEditingSelection();
