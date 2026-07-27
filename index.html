@@ -499,15 +499,9 @@
         <!-- Section 6/7: Find & Search — filter, reverse search, deep thinking search -->
         <div class="draft-subpanel" id="draft-subpanel-find" data-subpanel="find" role="tabpanel" aria-labelledby="draft-subtab-find" hidden>
 
-          <nav class="draft-subnav draft-subnav--nested" role="tablist" aria-label="Find and search modes">
-            <button type="button" class="draft-subtab" role="tab" data-searchmode="filter" aria-selected="true" aria-controls="draft-searchmode-filter" id="draft-searchmode-tab-filter">By filter</button>
-            <button type="button" class="draft-subtab" role="tab" data-searchmode="reverse" aria-selected="false" aria-controls="draft-searchmode-reverse" id="draft-searchmode-tab-reverse">Reverse search</button>
-            <button type="button" class="draft-subtab" role="tab" data-searchmode="deep" aria-selected="false" aria-controls="draft-searchmode-deep" id="draft-searchmode-tab-deep">Deep thinking search</button>
-          </nav>
+          <div class="draft-find-layout draft-find-layout--triple">
 
-          <!-- 6. By filter (Template Finder) -->
-          <div class="draft-find-layout draft-search-mode" id="draft-searchmode-filter" data-searchmode-panel="filter" role="tabpanel" aria-labelledby="draft-searchmode-tab-filter">
-
+            <!-- 6. By filter (Template Finder) -->
             <div class="draft-col draft-col--find-filters">
               <div class="draft-col__header">
                 <h2 class="draft-col__title">Template Finder</h2>
@@ -530,11 +524,9 @@
               <select id="draft-find-subenquiry" class="summit-select draft-find-select" aria-label="Filter by sub-enquiry" disabled></select>
 
               <button type="button" class="summit-btn" id="draft-find-reset-btn">Reset filters</button>
-            </div>
 
-            <div class="draft-col draft-col--find-results">
-              <div class="draft-col__header">
-                <h2 class="draft-col__title">Results</h2>
+              <div class="draft-col__subhead">
+                <h3 class="draft-col__subtitle">Results</h3>
                 <span class="draft-find-count" id="draft-find-count"></span>
               </div>
               <div class="draft-find-results" id="draft-find-results" role="list">
@@ -542,11 +534,7 @@
               </div>
             </div>
 
-          </div>
-
-          <!-- 7.1 Reverse search -->
-          <div class="draft-find-layout draft-search-mode" id="draft-searchmode-reverse" data-searchmode-panel="reverse" role="tabpanel" aria-labelledby="draft-searchmode-tab-reverse" hidden>
-
+            <!-- 7.1 Reverse search -->
             <div class="draft-col draft-col--find-filters">
               <div class="draft-col__header">
                 <h2 class="draft-col__title">Reverse search</h2>
@@ -563,23 +551,17 @@
               <div class="draft-keywords" id="draft-reverse-keywords" aria-live="polite" aria-labelledby="draft-reverse-keywords-title">
                 <p class="draft-empty-note" id="draft-reverse-keywords-empty">Extracted keywords will appear here — click any keyword to remove it from the match.</p>
               </div>
-            </div>
 
-            <div class="draft-col draft-col--find-results">
-              <div class="draft-col__header">
-                <h2 class="draft-col__title">Closest Sub-Enquiries</h2>
+              <div class="draft-col__subhead">
+                <h3 class="draft-col__subtitle">Closest Sub-Enquiries</h3>
                 <span class="draft-find-count" id="draft-reverse-count"></span>
               </div>
               <div class="draft-find-results" id="draft-reverse-results">
-                <p class="draft-empty-note" id="draft-reverse-empty">Paste some text on the left and click "Find matching Sub-Enquiries" to see ranked matches.</p>
+                <p class="draft-empty-note" id="draft-reverse-empty">Paste some text above and click "Find matching Sub-Enquiries" to see ranked matches.</p>
               </div>
             </div>
 
-          </div>
-
-          <!-- 7.2 Deep thinking search -->
-          <div class="draft-find-layout draft-search-mode" id="draft-searchmode-deep" data-searchmode-panel="deep" role="tabpanel" aria-labelledby="draft-searchmode-tab-deep" hidden>
-
+            <!-- 7.2 Deep thinking search -->
             <div class="draft-col draft-col--find-filters">
               <div class="draft-col__header">
                 <h2 class="draft-col__title">Deep thinking search</h2>
@@ -593,11 +575,9 @@
                 <button type="button" class="summit-btn" id="draft-deep-rebuild-btn">Rebuild index</button>
               </div>
               <p class="draft-deep-index-status" id="draft-deep-index-status" aria-live="polite"></p>
-            </div>
 
-            <div class="draft-col draft-col--find-results">
-              <div class="draft-col__header">
-                <h2 class="draft-col__title">Closest templates</h2>
+              <div class="draft-col__subhead">
+                <h3 class="draft-col__subtitle">Closest Templates</h3>
                 <span class="draft-find-count" id="draft-deep-count"></span>
               </div>
               <div class="draft-find-results" id="draft-deep-results">
