@@ -56,11 +56,18 @@
   min-height: 0;
 }
 
-.draft-layout,
+/* A subpanel with [hidden] must actually disappear, no matter what
+   display value a more specific rule below gives it — this was the
+   root cause of Tag / Find & Search / Import-Export bleeding into
+   each other. Author rules always beat the browser's UA [hidden]
+   rule at equal specificity, so this needs to be explicit. */
+.draft-subpanel[hidden] {
+  display: none !important;
+}
+
 .draft-find-layout {
   height: 100%;
 }
-
 
 .draft-layout {
   display: grid;
@@ -386,6 +393,9 @@
     border-right: none !important;
     border-bottom: 1px solid var(--gray-line);
   }
+  .draft-find-layout--triple {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ---------- 6. Template Finder ---------- */
@@ -396,8 +406,30 @@
   gap: 1px;
 }
 
+.draft-find-layout--triple {
+  grid-template-columns: repeat(3, minmax(240px, 1fr));
+}
+
 .draft-col--find-filters {
   border-right: 1px solid var(--gray-line);
+}
+
+.draft-find-layout--triple .draft-col--find-filters:last-child {
+  border-right: none;
+}
+
+.draft-col__subhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 18px 0 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--gray-line);
+}
+
+.draft-col__subhead .draft-col__subtitle {
+  margin: 0;
 }
 
 .draft-field-label {
@@ -548,25 +580,6 @@
 }
 
 /* ---------- 6/7. Find & Search (filter / reverse / deep thinking) ---------- */
-
-#draft-subpanel-find {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-
-.draft-subnav--nested {
-  border-bottom: 1px solid var(--gray-line);
-  background: none;
-  padding: 10px 18px 12px;
-  flex: none;
-}
-
-.draft-search-mode {
-  flex: 1 1 auto;
-  min-height: 0;
-}
 
 .draft-search-help {
   font-size: 12.5px;
