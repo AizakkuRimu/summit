@@ -81,14 +81,12 @@
   }
 
   // ---------- Sub-tab nav (Tag / Find & Search / Import-Export) ----------
-  const subtabs = Array.from(document.querySelectorAll('.draft-subnav:not(.draft-subnav--nested) > .draft-subtab'));
+  const subtabs = Array.from(document.querySelectorAll('.draft-subnav > .draft-subtab'));
   const subpanels = {
     tag: document.getElementById('draft-subpanel-tag'),
     find: document.getElementById('draft-subpanel-find'),
     importexport: document.getElementById('draft-subpanel-importexport')
   };
-
-  let deepIndexBuilt = false;
 
   function activateSubtab(name) {
     if (!subpanels[name]) return;
@@ -96,7 +94,6 @@
       if (tab.dataset.subtab) tab.setAttribute('aria-selected', String(tab.dataset.subtab === name));
     });
     Object.keys(subpanels).forEach((key) => { subpanels[key].hidden = key !== name; });
-    if (name === 'find') renderFindResults();
     if (name === 'importexport') renderBatchList();
   }
 
@@ -119,13 +116,6 @@
   const expandedResultIds = new Set();
 
   // ---------- 7. Reverse Search & Deep Thinking Search DOM references ----------
-  const searchModeTabs = Array.from(document.querySelectorAll('.draft-subnav--nested > .draft-subtab'));
-  const searchModePanels = {
-    filter: document.getElementById('draft-searchmode-filter'),
-    reverse: document.getElementById('draft-searchmode-reverse'),
-    deep: document.getElementById('draft-searchmode-deep')
-  };
-
   const reverseInput = document.getElementById('draft-reverse-input');
   const reverseBtn = document.getElementById('draft-reverse-btn');
   const reverseClearBtn = document.getElementById('draft-reverse-clear-btn');
@@ -146,22 +136,6 @@
   const deepCountEl = document.getElementById('draft-deep-count');
   let deepIndex = []; // [{ subId, keywords: [...] }] — one entry per Sub-Enquiry with a template
   const expandedDeepIds = new Set();
-
-  function activateSearchMode(name) {
-    if (!searchModePanels[name]) return;
-    searchModeTabs.forEach((tab) => {
-      tab.setAttribute('aria-selected', String(tab.dataset.searchmode === name));
-    });
-    Object.keys(searchModePanels).forEach((key) => { searchModePanels[key].hidden = key !== name; });
-    if (name === 'deep' && !deepIndexBuilt) {
-      deepIndexBuilt = true;
-      buildDeepIndex();
-    }
-  }
-
-  searchModeTabs.forEach((tab) => {
-    tab.addEventListener('click', () => activateSearchMode(tab.dataset.searchmode));
-  });
 
   let uidCounter = 0;
   function uid(prefix) {
@@ -1441,13 +1415,9 @@
     renderDetail();
     refreshLabelDatalist();
     refreshFindFilters();
-    if (!subpanels.find.hidden) {
-      renderFindResults();
-      if (deepIndexBuilt) {
-        buildDeepIndex();
-        if (reverseHasSearched) renderReverseResults();
-      }
-    }
+    renderFindResults();
+    buildDeepIndex();
+    if (reverseHasSearched) renderReverseResults();
     if (subpanels.importexport && !subpanels.importexport.hidden) renderBatchList();
   }
 
@@ -1808,7 +1778,7 @@
         (result.skipped ? ', ' + result.skipped + ' skipped (unrecognised)' : '') + '.';
       showToast('Batch import complete.');
       renderAll();
-      if (deepIndexBuilt) buildDeepIndex();
+      buildDeepIndex();
     }
   });
 
@@ -1933,7 +1903,7 @@
       showToast('Categorization outline imported.');
       renderAll();
       refreshFileSelects();
-      if (deepIndexBuilt) buildDeepIndex();
+      buildDeepIndex();
     }
   }
 
