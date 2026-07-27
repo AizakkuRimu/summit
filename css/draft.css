@@ -244,6 +244,82 @@
   opacity: 0.45;
 }
 
+/* ---------- Searchable combobox (type-to-filter over a <select>) ---------- */
+
+.draft-combobox {
+  position: relative;
+  width: 100%;
+}
+
+.draft-combobox__native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.draft-combobox__input {
+  width: 100%;
+  background: var(--stone-raised);
+  color: var(--ink);
+  border: 1px solid var(--gray-line);
+}
+
+.draft-combobox__input::placeholder {
+  color: var(--gray);
+}
+
+.draft-combobox__input:disabled {
+  opacity: 0.45;
+}
+
+.draft-combobox__menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--stone-raised);
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.14);
+}
+
+.draft-combobox__option,
+.draft-combobox__empty {
+  padding: 7px 10px;
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.draft-combobox__option:hover {
+  background: var(--bronze-soft);
+}
+
+.draft-combobox__option--new {
+  margin-top: 2px;
+  border-top: 1px solid var(--gray-line);
+  border-radius: 0 0 5px 5px;
+  color: var(--bronze-deep);
+  font-weight: 500;
+}
+
+.draft-combobox__empty {
+  color: var(--gray);
+  cursor: default;
+}
+
 /* ---------- 5.2 Hierarchy tree ---------- */
 
 .draft-tree {
