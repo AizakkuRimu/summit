@@ -650,8 +650,163 @@
   const STRIP_ENTIRELY = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'NOSCRIPT']);
   const SAFE_URL = /^(https?:|mailto:|tel:|\/|#)/i;
 
+  // ------------------------------------------------------------
+  // Normalizing Word/Outlook paste artifacts (2.4a)
+  //
+  // Word/Outlook HTML doesn't describe a letter the way a browser
+  // would. Two things it does that bite us specifically:
+  //
+  //  1. A simple visual line-wrap (typed at a fixed width, or just
+  //     Word's own layout) is very often serialized as its own
+  //     <p class="MsoNormal" style="...mso-margin-top-alt:auto;...">
+  //     rather than living inside one flowing paragraph. Word hides
+  //     the seam by rendering that "no extra spacing" pair with zero
+  //     visible gap, so on screen — including once pasted in here,
+  //     since we keep the structure — it reads as one paragraph. But
+  //     it's still N separate paragraphs under the hood, and reading
+  //     the content back out as plain text (Copy template, export,
+  //     clipboard copy) turns every one of those into a real newline.
+  //
+  //  2. A bulleted/numbered list isn't a real <ul>/<ol> at all — each
+  //     item is a <p style="mso-list:l# level# lfo#"> whose bullet or
+  //     number is a plain character sitting in a leading
+  //     <span style="mso-list:Ignore">, usually styled with
+  //     font-family:Symbol or font-family:Wingdings so it renders as
+  //     a bullet glyph. Our style allow-list strips font-family
+  //     (see ALLOWED_STYLES below), so that character survives but
+  //     renders in whatever font happens to be active instead —
+  //     which is why a Word bullet can come out looking like a random
+  //     dingbat (a clock, a smiley, ...) instead of a bullet or number.
+  //
+  // Both need to be resolved before sanitizeHTML/matchPageFormatting
+  // strip the mso- styles and classes that mark them, so this runs
+  // first, on the untouched parsed HTML.
+  function normalizeWordPasteArtifacts(root) {
+    convertWordListParagraphs(root);
+    mergeWordLineWraps(root);
+  }
+
+  // Rebuilds Word's fake "list built from paragraphs" markup into a
+  // real <ul>/<ol><li> tree, discarding the raw bullet/number marker
+  // rather than trying to preserve a glyph that depends on a font we
+  // don't ship (see note above).
+  function convertWordListParagraphs(root) {
+    const paras = Array.from(root.querySelectorAll('p'));
+    let i = 0;
+    while (i < paras.length) {
+      const style = paras[i].getAttribute('style') || '';
+      const head = /mso-list\s*:\s*l(\S+)\s+level(\d+)/i.exec(style);
+      if (!head) { i++; continue; }
+
+      const listId = head[1];
+      const run = [];
+      let j = i;
+      while (j < paras.length) {
+        const s = paras[j].getAttribute('style') || '';
+        const m = /mso-list\s*:\s*l(\S+)\s+level(\d+)/i.exec(s);
+        if (!m || m[1] !== listId) break;
+        run.push({ el: paras[j], level: parseInt(m[2], 10) || 1 });
+        j++;
+      }
+
+      const holder = document.createElement('div');
+      const stack = []; // { level, listEl }
+      run.forEach(({ el, level }) => {
+        const marker = el.querySelector('span[style*="mso-list"]');
+        let markerText = '';
+        if (marker) {
+          markerText = marker.textContent.replace(/\s+/g, '');
+          marker.remove();
+        }
+        const ordered = /^[0-9]+[.)]$|^[a-zA-Z][.)]$|^[ivxlcdm]+[.)]$/i.test(markerText);
+
+        while (stack.length && stack[stack.length - 1].level > level) stack.pop();
+        let top = stack[stack.length - 1];
+        if (!top || top.level < level) {
+          const listEl = document.createElement(ordered ? 'ol' : 'ul');
+          if (top) {
+            (top.listEl.lastElementChild || top.listEl).appendChild(listEl);
+          } else {
+            holder.appendChild(listEl);
+          }
+          stack.push({ level, listEl });
+          top = stack[stack.length - 1];
+        }
+
+        const li = document.createElement('li');
+        while (el.firstChild) li.appendChild(el.firstChild);
+        top.listEl.appendChild(li);
+      });
+
+      if (holder.firstChild) run[0].el.replaceWith(holder.firstChild);
+      else run[0].el.remove();
+      run.slice(1).forEach(({ el }) => el.remove());
+      i = j;
+    }
+  }
+
+  // Merges consecutive "no extra spacing" Word paragraphs (and lone
+  // mid-paragraph <br>s, which Word also uses as wrap points) back
+  // into one real paragraph, joined with a single space. A run that
+  // includes an explicitly empty paragraph is treated as a genuine
+  // blank line and kept as one.
+  function mergeWordLineWraps(root) {
+    const isSoftParagraph = (el) => {
+      if (!el || el.nodeType !== 1 || (el.tagName !== 'P' && el.tagName !== 'DIV')) return false;
+      const style = el.getAttribute('style') || '';
+      const cls = el.getAttribute('class') || '';
+      return /mso-margin-(top|bottom)-alt/i.test(style) || /\bMsoNormal\b/i.test(cls);
+    };
+
+    function mergeRun(container) {
+      const kids = Array.from(container.childNodes);
+      let i = 0;
+      while (i < kids.length) {
+        if (!isSoftParagraph(kids[i])) { i++; continue; }
+        const run = [kids[i]];
+        let j = i + 1;
+        while (j < kids.length) {
+          if (isSoftParagraph(kids[j])) { run.push(kids[j]); j++; }
+          else if (kids[j].nodeType === 3 && !kids[j].textContent.trim()) { j++; }
+          else break;
+        }
+        if (run.length > 1) {
+          const merged = document.createElement('p');
+          run.forEach((p) => {
+            const text = p.textContent.replace(/\u00a0/g, ' ').trim();
+            if (!text) {
+              if (merged.lastChild) merged.appendChild(document.createElement('br'));
+              merged.appendChild(document.createElement('br'));
+              return;
+            }
+            const prevIsBr = merged.lastChild && merged.lastChild.nodeType === 1 && merged.lastChild.tagName === 'BR';
+            if (merged.childNodes.length && !prevIsBr) merged.appendChild(document.createTextNode(' '));
+            while (p.firstChild) merged.appendChild(p.firstChild);
+          });
+          run[0].replaceWith(merged);
+          run.slice(1).forEach((p) => p.remove());
+        }
+        i = j;
+      }
+    }
+
+    mergeRun(root);
+    Array.from(root.querySelectorAll('p, div')).forEach(mergeRun);
+
+    // A lone <br> (not part of a deliberate run of 2+) inside any
+    // remaining paragraph is almost always a Word wrap point too.
+    Array.from(root.querySelectorAll('br')).forEach((br) => {
+      const prev = br.previousSibling;
+      const next = br.nextSibling;
+      const prevIsBr = prev && prev.nodeType === 1 && prev.tagName === 'BR';
+      const nextIsBr = next && next.nodeType === 1 && next.tagName === 'BR';
+      if (!prevIsBr && !nextIsBr) br.replaceWith(' ');
+    });
+  }
+
   function sanitizeHTML(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
+    normalizeWordPasteArtifacts(doc.body);
     cleanNode(doc.body);
     return doc.body.innerHTML;
   }
@@ -758,6 +913,7 @@
 
   function matchPageFormatting(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
+    normalizeWordPasteArtifacts(doc.body);
     stripToPageFormatting(doc.body);
     return doc.body.innerHTML;
   }
@@ -917,8 +1073,35 @@
   // chat/mail composers, or Word's own "Keep Text Only" paste). This
   // walks a throwaway clone and turns each block boundary back into a
   // real newline before reading the text out.
+  // Word's HTML is pretty-printed, so the raw text nodes inside a <p>
+  // or <li> often carry stray newlines/tabs/indentation from the
+  // source markup itself (e.g. a line break right after the marker
+  // <span>). A browser collapses that as insignificant whitespace
+  // when it renders the page, which is part of why it looks fine in
+  // Mountain — but textContent doesn't collapse anything, so left
+  // alone it leaks straight into the plain-text output as extra
+  // blank lines. Flatten it to single spaces before we add any of our
+  // own, deliberate newlines.
+  function collapseInsignificantWhitespace(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      node.nodeValue = node.nodeValue.replace(/[ \t\n\r\u00a0]+/g, ' ');
+    }
+  }
+
   function wrapperToPlainText(wrapper) {
     const clone = wrapper.cloneNode(true);
+    collapseInsignificantWhitespace(clone);
+    Array.from(clone.querySelectorAll('li')).forEach((li) => {
+      const ordered = li.parentElement && li.parentElement.tagName === 'OL';
+      let marker = '\u2022 ';
+      if (ordered) {
+        const siblings = Array.from(li.parentElement.children).filter((c) => c.tagName === 'LI');
+        marker = (siblings.indexOf(li) + 1) + '. ';
+      }
+      li.insertBefore(document.createTextNode(marker), li.firstChild);
+    });
     Array.from(clone.querySelectorAll('br')).forEach((br) => {
       br.replaceWith('\n');
     });
@@ -927,8 +1110,11 @@
       el.insertAdjacentText('afterend', '\n');
     });
     return (clone.textContent || '')
+      .replace(/ {2,}/g, ' ')
+      .replace(/ *\n */g, '\n')
       .replace(/\n{3,}/g, '\n\n')
-      .replace(/^\n+|\n+$/g, '');
+      .replace(/^\n+|\n+$/g, '')
+      .trim();
   }
 
   function handleCopyOrCut(e) {
