@@ -80,12 +80,11 @@
     }, 4000);
   }
 
-  // ---------- Sub-tab nav (Tag / Find / Search / Import-Export) ----------
+  // ---------- Sub-tab nav (Tag / Find & Search / Import-Export) ----------
   const subtabs = Array.from(document.querySelectorAll('.draft-subnav:not(.draft-subnav--nested) > .draft-subtab'));
   const subpanels = {
     tag: document.getElementById('draft-subpanel-tag'),
     find: document.getElementById('draft-subpanel-find'),
-    search: document.getElementById('draft-subpanel-search'),
     importexport: document.getElementById('draft-subpanel-importexport')
   };
 
@@ -98,10 +97,6 @@
     });
     Object.keys(subpanels).forEach((key) => { subpanels[key].hidden = key !== name; });
     if (name === 'find') renderFindResults();
-    if (name === 'search' && !deepIndexBuilt) {
-      deepIndexBuilt = true;
-      buildDeepIndex();
-    }
     if (name === 'importexport') renderBatchList();
   }
 
@@ -126,6 +121,7 @@
   // ---------- 7. Reverse Search & Deep Thinking Search DOM references ----------
   const searchModeTabs = Array.from(document.querySelectorAll('.draft-subnav--nested > .draft-subtab'));
   const searchModePanels = {
+    filter: document.getElementById('draft-searchmode-filter'),
     reverse: document.getElementById('draft-searchmode-reverse'),
     deep: document.getElementById('draft-searchmode-deep')
   };
@@ -157,6 +153,10 @@
       tab.setAttribute('aria-selected', String(tab.dataset.searchmode === name));
     });
     Object.keys(searchModePanels).forEach((key) => { searchModePanels[key].hidden = key !== name; });
+    if (name === 'deep' && !deepIndexBuilt) {
+      deepIndexBuilt = true;
+      buildDeepIndex();
+    }
   }
 
   searchModeTabs.forEach((tab) => {
@@ -1441,10 +1441,12 @@
     renderDetail();
     refreshLabelDatalist();
     refreshFindFilters();
-    if (!subpanels.find.hidden) renderFindResults();
-    if (deepIndexBuilt && !subpanels.search.hidden) {
-      buildDeepIndex();
-      if (reverseHasSearched) renderReverseResults();
+    if (!subpanels.find.hidden) {
+      renderFindResults();
+      if (deepIndexBuilt) {
+        buildDeepIndex();
+        if (reverseHasSearched) renderReverseResults();
+      }
     }
     if (subpanels.importexport && !subpanels.importexport.hidden) renderBatchList();
   }
