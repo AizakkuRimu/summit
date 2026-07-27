@@ -908,6 +908,29 @@
     return [cs.marginTop, cs.marginRight, cs.marginBottom, cs.marginLeft].join(' ');
   }
 
+  // Builds the text/plain clipboard payload from a fragment that may
+  // contain <p>, <br>, and (post buildWordListStyles) list paragraphs.
+  // `wrapper.textContent` alone concatenates every text node with no
+  // separator at all — paragraph and line boundaries simply vanish,
+  // so a multi-paragraph copy pastes as one run-on wall of text
+  // anywhere that only reads text/plain (plain-text editors, some
+  // chat/mail composers, or Word's own "Keep Text Only" paste). This
+  // walks a throwaway clone and turns each block boundary back into a
+  // real newline before reading the text out.
+  function wrapperToPlainText(wrapper) {
+    const clone = wrapper.cloneNode(true);
+    Array.from(clone.querySelectorAll('br')).forEach((br) => {
+      br.replaceWith('\n');
+    });
+    const blockSelector = 'p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote';
+    Array.from(clone.querySelectorAll(blockSelector)).forEach((el) => {
+      el.insertAdjacentText('afterend', '\n');
+    });
+    return (clone.textContent || '')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/^\n+|\n+$/g, '');
+  }
+
   function handleCopyOrCut(e) {
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount || sel.isCollapsed) return;
@@ -948,7 +971,7 @@
       '<body><!--StartFragment-->' + wrapper.innerHTML + '<!--EndFragment--></body></html>';
 
     e.clipboardData.setData('text/html', html);
-    e.clipboardData.setData('text/plain', wrapper.textContent);
+    e.clipboardData.setData('text/plain', wrapperToPlainText(wrapper));
     e.preventDefault();
 
     if (e.type === 'cut') document.execCommand('delete', false, null);

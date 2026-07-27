@@ -64,6 +64,7 @@
   const templateInput = document.getElementById('draft-template-input');
   const templateSaveBtn = document.getElementById('draft-template-save-btn');
   const templateClearBtn = document.getElementById('draft-template-clear-btn');
+  const templateLinkBtn = document.getElementById('draft-template-link-btn');
   const templateStatus = document.getElementById('draft-template-status');
 
   const toastEl = document.getElementById('summit-toast');
@@ -712,6 +713,138 @@
     updateFileButtonState();
   });
 
+  // As a Scheme/Category/Enquiry/Sub-Enquiry list grows long, scanning
+  // a plain <select> dropdown gets slow. This layers a type-to-filter
+  // combobox over a <select> without touching any of the cascading
+  // logic that already targets it: the native <select> stays in the
+  // DOM (still driving .value/.disabled/change listeners exactly as
+  // before, just visually hidden), and a text input + filtered list
+  // sit in front of it. Picking a row sets the select's value and
+  // dispatches a real 'change' event, so every existing listener
+  // fires exactly as if the user had clicked the native option
+  // directly.
+  //
+  // Two flavours of placeholder show up across the app's selects:
+  //   - "File these keywords" (fillSelect): the blank option just
+  //     means "nothing chosen yet" and there's a pinned "+ New…"
+  //     sentinel (newValue) at the bottom.
+  //   - Template Finder (fillFindSelect): the blank option is a real,
+  //     meaningful choice ("All schemes" etc.), so it belongs in the
+  //     filterable list too, and there's no "+ New…" row.
+  function enhanceSearchableSelect(select, opts) {
+    opts = opts || {};
+    const includeEmptyOption = !!opts.includeEmptyOption;
+    const newValue = opts.newValue || null;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'draft-combobox';
+    select.parentNode.insertBefore(wrap, select);
+    wrap.appendChild(select);
+    select.classList.add('draft-combobox__native');
+    select.setAttribute('tabindex', '-1');
+    select.setAttribute('aria-hidden', 'true');
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'summit-select draft-combobox__input';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    if (select.getAttribute('aria-label')) input.setAttribute('aria-label', select.getAttribute('aria-label'));
+    wrap.appendChild(input);
+
+    const menu = document.createElement('ul');
+    menu.className = 'draft-combobox__menu';
+    menu.hidden = true;
+    wrap.appendChild(menu);
+
+    function syncInputFromSelect() {
+      const opt = select.options[select.selectedIndex];
+      if (!opt || opt.value === newValue) { input.value = ''; return; }
+      if (opt.value === '' && !includeEmptyOption) { input.value = ''; return; }
+      input.value = opt.textContent;
+    }
+
+    function closeMenu() {
+      menu.hidden = true;
+      menu.innerHTML = '';
+    }
+
+    function chooseOption(opt) {
+      select.value = opt.value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      syncInputFromSelect();
+      closeMenu();
+    }
+
+    function openMenu(filterText) {
+      if (select.disabled) return;
+      const q = (filterText || '').trim().toLowerCase();
+      const all = Array.from(select.options);
+      const newOpt = newValue ? all.find((o) => o.value === newValue) : null;
+      let regular = all.filter((o) => o.value !== newValue);
+      if (!includeEmptyOption) regular = regular.filter((o) => o.value !== '');
+      const matches = regular.filter((o) => !q || o.textContent.toLowerCase().includes(q));
+
+      menu.innerHTML = '';
+      if (matches.length === 0 && !newOpt) {
+        const li = document.createElement('li');
+        li.className = 'draft-combobox__empty';
+        li.textContent = 'No matches';
+        menu.appendChild(li);
+      } else {
+        if (matches.length === 0) {
+          const li = document.createElement('li');
+          li.className = 'draft-combobox__empty';
+          li.textContent = 'No matches';
+          menu.appendChild(li);
+        }
+        matches.forEach((o) => {
+          const li = document.createElement('li');
+          li.className = 'draft-combobox__option';
+          li.textContent = o.textContent;
+          li.addEventListener('mousedown', (e) => { e.preventDefault(); chooseOption(o); });
+          menu.appendChild(li);
+        });
+        if (newOpt) {
+          const li = document.createElement('li');
+          li.className = 'draft-combobox__option draft-combobox__option--new';
+          li.textContent = newOpt.textContent;
+          li.addEventListener('mousedown', (e) => { e.preventDefault(); chooseOption(newOpt); });
+          menu.appendChild(li);
+        }
+      }
+      menu.hidden = false;
+    }
+
+    input.addEventListener('focus', () => { input.select(); openMenu(''); });
+    input.addEventListener('input', () => openMenu(input.value));
+    input.addEventListener('blur', () => {
+      // Deferred so a mousedown on an option registers before the menu closes.
+      setTimeout(() => { closeMenu(); syncInputFromSelect(); }, 0);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { closeMenu(); input.blur(); }
+      if (e.key === 'Enter') e.preventDefault();
+    });
+
+    // fillSelect()/fillFindSelect() replace the options wholesale
+    // whenever the hierarchy or the cascade level changes — catch
+    // that here so the visible input always reflects the select's
+    // current state.
+    new MutationObserver(() => { if (menu.hidden) syncInputFromSelect(); })
+      .observe(select, { childList: true });
+    new MutationObserver(() => { input.disabled = select.disabled; })
+      .observe(select, { attributes: true, attributeFilter: ['disabled'] });
+    select.addEventListener('change', syncInputFromSelect);
+
+    input.disabled = select.disabled;
+    syncInputFromSelect();
+  }
+
+  [fileSchemeSel, fileCategorySel, fileEnquirySel, fileSubSel].forEach((sel) => {
+    enhanceSearchableSelect(sel, { newValue: NEW_VALUE });
+  });
+
   fileBtn.addEventListener('click', () => {
     const subId = fileSubSel.value;
     if (!subId || subId === NEW_VALUE || state.pendingKeywords.length === 0) return;
@@ -802,6 +935,74 @@
       const opt = document.createElement('option');
       opt.value = label;
       labelDatalist.appendChild(opt);
+    });
+  }
+
+  // ---------- Template textarea: preserve pasted hyperlinks ----------
+  // A plain <textarea> can only hold plain text, so a normal paste
+  // takes the clipboard's text/plain representation. For a "rich"
+  // link — display text that differs from its URL, e.g. copied from a
+  // webpage or an email — that text/plain version is often just the
+  // display text, with the actual destination silently dropped. When
+  // the clipboard also carries text/html, we pull the href out of
+  // every <a> ourselves and fold it into the inserted text as
+  // "label (https://example.com)", so the destination survives.
+  // Because the result is still plain text, it round-trips through
+  // the existing save/export/import pipeline (.txt, .docx, batch
+  // import/export, clipboard copy) with no changes needed there.
+  function htmlAnchorsToPlainText(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    Array.from(doc.body.querySelectorAll('a[href]')).forEach((a) => {
+      const href = (a.getAttribute('href') || '').trim();
+      if (!href) return;
+      const label = a.textContent.trim();
+      const display = (label && label !== href) ? (label + ' (' + href + ')') : href;
+      a.replaceWith(document.createTextNode(display));
+    });
+    Array.from(doc.body.querySelectorAll('br')).forEach((br) => br.replaceWith('\n'));
+    const blockSelector = 'p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote';
+    Array.from(doc.body.querySelectorAll(blockSelector)).forEach((el) => {
+      el.insertAdjacentText('afterend', '\n');
+    });
+    return (doc.body.textContent || '')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/^\n+|\n+$/g, '');
+  }
+
+  function insertAtCursor(textarea, text) {
+    const start = textarea.selectionStart == null ? textarea.value.length : textarea.selectionStart;
+    const end = textarea.selectionEnd == null ? textarea.value.length : textarea.selectionEnd;
+    const before = textarea.value.slice(0, start);
+    const after = textarea.value.slice(end);
+    textarea.value = before + text + after;
+    const caret = start + text.length;
+    textarea.setSelectionRange(caret, caret);
+  }
+
+  templateInput.addEventListener('paste', (e) => {
+    const cd = e.clipboardData || window.clipboardData;
+    if (!cd) return;
+    const html = cd.getData('text/html');
+    if (!html || !/<a[\s>]/i.test(html)) return; // no links — default plain-text paste already works
+    e.preventDefault();
+    const text = htmlAnchorsToPlainText(html);
+    let inserted = false;
+    try { inserted = document.execCommand && document.execCommand('insertText', false, text); } catch (err) { inserted = false; }
+    if (!inserted) insertAtCursor(templateInput, text);
+  });
+
+  if (templateLinkBtn) {
+    templateLinkBtn.addEventListener('click', () => {
+      const url = window.prompt('Link URL:');
+      if (!url || !url.trim()) return;
+      const label = window.prompt('Link text (leave blank to show the URL itself):', '');
+      const trimmedUrl = url.trim();
+      const trimmedLabel = (label || '').trim();
+      const display = (trimmedLabel && trimmedLabel !== trimmedUrl)
+        ? (trimmedLabel + ' (' + trimmedUrl + ')')
+        : trimmedUrl;
+      templateInput.focus();
+      insertAtCursor(templateInput, display);
     });
   }
 
@@ -946,6 +1147,10 @@
     if (findLabelSel) findLabelSel.value = '';
     renderFindResults();
   });
+
+  [findSchemeSel, findCategorySel, findEnquirySel, findSubSel, findLabelSel]
+    .filter(Boolean)
+    .forEach((sel) => enhanceSearchableSelect(sel, { includeEmptyOption: true }));
 
   // Search matches Scheme/Category/Enquiry/Sub-Enquiry names (browse/filter),
   // keywords, and the template text itself (Section 6, bullet 2).
