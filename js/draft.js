@@ -52,6 +52,7 @@
   const fileBtn = document.getElementById('draft-file-btn');
 
   const addSchemeBtn = document.getElementById('draft-add-scheme-btn');
+  const quickAddBtn = document.getElementById('draft-quick-add-btn');
   const treeEl = document.getElementById('draft-tree');
   const treeEmptyNote = document.getElementById('draft-tree-empty');
 
@@ -712,6 +713,221 @@
     }
     updateFileButtonState();
   });
+
+  // ============================================================
+  // Quick Add: see the whole Scheme/Category/Enquiry/Sub-Enquiry
+  // chain in one small window and build out a new set without
+  // leaving the Hierarchy column. Each level is disabled until its
+  // parent has a value, same rule as "File keywords here" above —
+  // you can stop at any level (leave the rest blank) but you can
+  // never skip one that doesn't exist yet. Creating a node happens
+  // immediately when you pick "+ New…", so there's no separate
+  // "Create" step to remember to click.
+  // ============================================================
+
+  let quickAddEl = null;
+  let quickAddSel = null;
+
+  function ensureQuickAddModal() {
+    if (quickAddEl) return quickAddEl;
+
+    const modal = document.createElement('div');
+    modal.className = 'summit-modal draft-quick-add';
+    modal.id = 'draft-quick-add-modal';
+    modal.hidden = true;
+    modal.setAttribute('aria-hidden', 'true');
+    modal.innerHTML =
+      '<div class="summit-modal__backdrop" data-quick-add-close></div>' +
+      '<div class="summit-modal__panel draft-quick-add__panel" role="dialog" aria-modal="true" aria-labelledby="draft-quick-add-title">' +
+        '<div class="summit-modal__header">' +
+          '<h2 class="summit-modal__title" id="draft-quick-add-title">Quick Add</h2>' +
+          '<button type="button" class="summit-modal__close" data-quick-add-close aria-label="Close">\u2715</button>' +
+        '</div>' +
+        '<p class="draft-name-helper__hint">Pick an existing level or add a new one. Leave the rest blank if you only need a Scheme or Category for now \u2014 the level before it just has to already exist.</p>' +
+
+        '<label class="draft-field-label" for="draft-quick-add-scheme">Scheme</label>' +
+        '<select class="summit-select" id="draft-quick-add-scheme"></select>' +
+
+        '<label class="draft-field-label" for="draft-quick-add-category">Category</label>' +
+        '<select class="summit-select" id="draft-quick-add-category" disabled></select>' +
+
+        '<label class="draft-field-label" for="draft-quick-add-enquiry">Enquiry</label>' +
+        '<select class="summit-select" id="draft-quick-add-enquiry" disabled></select>' +
+
+        '<label class="draft-field-label" for="draft-quick-add-subenquiry">Sub-Enquiry</label>' +
+        '<select class="summit-select" id="draft-quick-add-subenquiry" disabled></select>' +
+
+        '<p class="draft-template-status" id="draft-quick-add-status" aria-live="polite"></p>' +
+
+        '<div class="summit-modal__actions">' +
+          '<button type="button" class="summit-btn summit-btn--primary" data-quick-add-close>Done</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+
+    quickAddSel = {
+      scheme: modal.querySelector('#draft-quick-add-scheme'),
+      category: modal.querySelector('#draft-quick-add-category'),
+      enquiry: modal.querySelector('#draft-quick-add-enquiry'),
+      subenquiry: modal.querySelector('#draft-quick-add-subenquiry'),
+      status: modal.querySelector('#draft-quick-add-status')
+    };
+
+    function refreshQuickScheme() {
+      fillSelect(
+        quickAddSel.scheme,
+        state.schemeIds.map((id) => ({ id, name: state.schemes[id].name })),
+        'Select scheme\u2026', '+ New scheme\u2026'
+      );
+      quickAddSel.category.innerHTML = ''; quickAddSel.category.disabled = true;
+      quickAddSel.enquiry.innerHTML = ''; quickAddSel.enquiry.disabled = true;
+      quickAddSel.subenquiry.innerHTML = ''; quickAddSel.subenquiry.disabled = true;
+    }
+
+    quickAddSel.scheme.addEventListener('change', () => {
+      let val = quickAddSel.scheme.value;
+      if (val === NEW_VALUE) {
+        const name = window.prompt('New scheme name:');
+        if (name && name.trim()) {
+          val = createScheme(name.trim());
+          expandedIds.add(val);
+          renderAll();
+          refreshQuickScheme();
+          quickAddSel.scheme.value = val;
+          quickAddSel.status.textContent = 'Added scheme \u201c' + name.trim() + '\u201d.';
+        } else {
+          quickAddSel.scheme.value = '';
+          return;
+        }
+      }
+      const schemeId = quickAddSel.scheme.value;
+      quickAddSel.enquiry.innerHTML = ''; quickAddSel.enquiry.disabled = true;
+      quickAddSel.subenquiry.innerHTML = ''; quickAddSel.subenquiry.disabled = true;
+      if (!schemeId) { quickAddSel.category.innerHTML = ''; quickAddSel.category.disabled = true; return; }
+      const scheme = state.schemes[schemeId];
+      fillSelect(
+        quickAddSel.category,
+        scheme.categoryIds.map((id) => ({ id, name: state.categories[id].name })),
+        'Select category\u2026', '+ New category\u2026'
+      );
+      quickAddSel.category.disabled = false;
+    });
+
+    quickAddSel.category.addEventListener('change', () => {
+      const schemeId = quickAddSel.scheme.value;
+      let val = quickAddSel.category.value;
+      if (val === NEW_VALUE) {
+        const name = window.prompt('New category name:');
+        if (name && name.trim()) {
+          val = createCategory(schemeId, name.trim());
+          expandedIds.add(schemeId); expandedIds.add(val);
+          renderAll();
+          const scheme = state.schemes[schemeId];
+          fillSelect(
+            quickAddSel.category,
+            scheme.categoryIds.map((id) => ({ id, name: state.categories[id].name })),
+            'Select category\u2026', '+ New category\u2026'
+          );
+          quickAddSel.category.value = val;
+          quickAddSel.status.textContent = 'Added category \u201c' + name.trim() + '\u201d.';
+        } else {
+          quickAddSel.category.value = '';
+          return;
+        }
+      }
+      const categoryId = quickAddSel.category.value;
+      quickAddSel.subenquiry.innerHTML = ''; quickAddSel.subenquiry.disabled = true;
+      if (!categoryId) { quickAddSel.enquiry.innerHTML = ''; quickAddSel.enquiry.disabled = true; return; }
+      const cat = state.categories[categoryId];
+      fillSelect(
+        quickAddSel.enquiry,
+        cat.enquiryIds.map((id) => ({ id, name: state.enquiries[id].name })),
+        'Select enquiry\u2026', '+ New enquiry\u2026'
+      );
+      quickAddSel.enquiry.disabled = false;
+    });
+
+    quickAddSel.enquiry.addEventListener('change', () => {
+      const categoryId = quickAddSel.category.value;
+      let val = quickAddSel.enquiry.value;
+      if (val === NEW_VALUE) {
+        const name = window.prompt('New enquiry name:');
+        if (name && name.trim()) {
+          val = createEnquiry(categoryId, name.trim());
+          const cat = state.categories[categoryId];
+          expandedIds.add(cat.schemeId); expandedIds.add(categoryId); expandedIds.add(val);
+          renderAll();
+          fillSelect(
+            quickAddSel.enquiry,
+            cat.enquiryIds.map((id) => ({ id, name: state.enquiries[id].name })),
+            'Select enquiry\u2026', '+ New enquiry\u2026'
+          );
+          quickAddSel.enquiry.value = val;
+          quickAddSel.status.textContent = 'Added enquiry \u201c' + name.trim() + '\u201d.';
+        } else {
+          quickAddSel.enquiry.value = '';
+          return;
+        }
+      }
+      const enquiryId = quickAddSel.enquiry.value;
+      if (!enquiryId) { quickAddSel.subenquiry.innerHTML = ''; quickAddSel.subenquiry.disabled = true; return; }
+      const enq = state.enquiries[enquiryId];
+      fillSelect(
+        quickAddSel.subenquiry,
+        enq.subEnquiryIds.map((id) => ({ id, name: state.subEnquiries[id].name })),
+        'Select sub-enquiry\u2026', '+ New sub-enquiry\u2026'
+      );
+      quickAddSel.subenquiry.disabled = false;
+    });
+
+    quickAddSel.subenquiry.addEventListener('change', () => {
+      const enquiryId = quickAddSel.enquiry.value;
+      const val = quickAddSel.subenquiry.value;
+      if (val === NEW_VALUE) {
+        quickAddSel.subenquiry.value = '';
+        openNameHelper('', (name) => {
+          const subId = createSubEnquiry(enquiryId, name);
+          const enq = state.enquiries[enquiryId];
+          renderAll();
+          fillSelect(
+            quickAddSel.subenquiry,
+            enq.subEnquiryIds.map((id) => ({ id, name: state.subEnquiries[id].name })),
+            'Select sub-enquiry\u2026', '+ New sub-enquiry\u2026'
+          );
+          quickAddSel.subenquiry.value = subId;
+          quickAddSel.status.textContent = 'Added sub-enquiry \u201c' + name + '\u201d.';
+        });
+      }
+    });
+
+    modal.querySelectorAll('[data-quick-add-close]').forEach((el) => {
+      el.addEventListener('click', closeQuickAdd);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !modal.hidden) closeQuickAdd();
+    });
+
+    quickAddEl = modal;
+    quickAddEl._refreshScheme = refreshQuickScheme;
+    return modal;
+  }
+
+  function openQuickAdd() {
+    const modal = ensureQuickAddModal();
+    modal._refreshScheme();
+    quickAddSel.status.textContent = '';
+    modal.hidden = false;
+    modal.setAttribute('aria-hidden', 'false');
+    quickAddSel.scheme.focus();
+  }
+
+  function closeQuickAdd() {
+    if (!quickAddEl) return;
+    quickAddEl.hidden = true;
+    quickAddEl.setAttribute('aria-hidden', 'true');
+  }
+
+  if (quickAddBtn) quickAddBtn.addEventListener('click', openQuickAdd);
 
   // As a Scheme/Category/Enquiry/Sub-Enquiry list grows long, scanning
   // a plain <select> dropdown gets slow. This layers a type-to-filter
@@ -2400,6 +2616,64 @@
     return result;
   }
 
+  // Scans every Sub-Enquiry already in the hierarchy and pulls out the
+  // distinct "Main Subject Matter" and "Specific Topic" values that have
+  // been used before (parsed the same way parseSubEnquiryName reads a
+  // name back apart). Feeding these back into the Name Helper as
+  // suggestions keeps naming consistent — e.g. everyone reuses "Housing"
+  // rather than one person typing "housing" and another "HOUSING issue".
+  function collectNameHelperFieldValues() {
+    const subjects = new Map(); // lowercase -> first-seen display form
+    const topics = new Map();
+    Object.keys(state.subEnquiries).forEach((id) => {
+      const parsed = parseSubEnquiryName(state.subEnquiries[id].name);
+      if (parsed.subject && !subjects.has(parsed.subject.toLowerCase())) {
+        subjects.set(parsed.subject.toLowerCase(), parsed.subject);
+      }
+      if (parsed.topic && !topics.has(parsed.topic.toLowerCase())) {
+        topics.set(parsed.topic.toLowerCase(), parsed.topic);
+      }
+    });
+    const sortFn = (a, b) => a.localeCompare(b);
+    return {
+      subjects: Array.from(subjects.values()).sort(sortFn),
+      topics: Array.from(topics.values()).sort(sortFn)
+    };
+  }
+
+  // Repopulates the Subject/Topic <datalist> options (native
+  // type-ahead) and the row of clickable chips underneath the fields
+  // (one-tap reuse) from whatever is currently in the hierarchy. Called
+  // fresh every time the modal opens so brand-new imports show up too.
+  function refreshNameHelperSuggestions() {
+    if (!nameHelperFields) return;
+    const { subjects, topics } = collectNameHelperFieldValues();
+
+    nameHelperFields.subjectList.innerHTML = subjects
+      .map((s) => '<option value="' + escapeHtmlLocal(s) + '"></option>').join('');
+    nameHelperFields.topicList.innerHTML = topics
+      .map((t) => '<option value="' + escapeHtmlLocal(t) + '"></option>').join('');
+
+    const chip = (field, value) =>
+      '<button type="button" class="draft-name-helper__chip" data-fill-field="' + field +
+      '" data-fill-value="' + escapeHtmlLocal(value) + '">' + escapeHtmlLocal(value) + '</button>';
+
+    if (!subjects.length && !topics.length) {
+      nameHelperFields.existingHint.innerHTML = '';
+      return;
+    }
+    let html = '';
+    if (subjects.length) {
+      html += '<span class="draft-name-helper__chip-label">Existing subjects:</span> ' +
+        subjects.slice(0, 20).map((s) => chip('subject', s)).join(' ');
+    }
+    if (topics.length) {
+      html += '<br><span class="draft-name-helper__chip-label">Existing topics:</span> ' +
+        topics.slice(0, 20).map((t) => chip('topic', t)).join(' ');
+    }
+    nameHelperFields.existingHint.innerHTML = html;
+  }
+
   function ensureNameHelperModal() {
     if (nameHelperEl) return nameHelperEl;
 
@@ -2425,10 +2699,13 @@
         '</div>' +
 
         '<label class="draft-field-label" for="draft-name-helper-subject">Main Subject Matter</label>' +
-        '<input type="text" class="draft-search-input draft-name-helper__input" id="draft-name-helper-subject" placeholder="e.g. Housing" />' +
+        '<input type="text" class="draft-search-input draft-name-helper__input" id="draft-name-helper-subject" placeholder="e.g. Housing" list="draft-name-helper-subject-list" autocomplete="off" />' +
+        '<datalist id="draft-name-helper-subject-list"></datalist>' +
 
         '<label class="draft-field-label" for="draft-name-helper-topic">Specific Topic <span>(if any)</span></label>' +
-        '<input type="text" class="draft-search-input draft-name-helper__input" id="draft-name-helper-topic" placeholder="e.g. HDB Resale" />' +
+        '<input type="text" class="draft-search-input draft-name-helper__input" id="draft-name-helper-topic" placeholder="e.g. HDB Resale" list="draft-name-helper-topic-list" autocomplete="off" />' +
+        '<datalist id="draft-name-helper-topic-list"></datalist>' +
+        '<p class="draft-name-helper__existing-hint" id="draft-name-helper-existing-hint"></p>' +
 
         '<label class="draft-field-label" for="draft-name-helper-detail">More Detailed Information <span>(if necessary)</span></label>' +
         '<textarea class="draft-search-input draft-name-helper__textarea" id="draft-name-helper-detail" rows="3" placeholder="Optional extra detail\u2026 new lines become dashes"></textarea>' +
@@ -2448,8 +2725,21 @@
       subject: modal.querySelector('#draft-name-helper-subject'),
       topic: modal.querySelector('#draft-name-helper-topic'),
       detail: modal.querySelector('#draft-name-helper-detail'),
-      preview: modal.querySelector('#draft-name-helper-preview')
+      preview: modal.querySelector('#draft-name-helper-preview'),
+      subjectList: modal.querySelector('#draft-name-helper-subject-list'),
+      topicList: modal.querySelector('#draft-name-helper-topic-list'),
+      existingHint: modal.querySelector('#draft-name-helper-existing-hint')
     };
+
+    nameHelperFields.existingHint.addEventListener('click', (e) => {
+      const chip = e.target.closest('[data-fill-field]');
+      if (!chip) return;
+      const field = chip.getAttribute('data-fill-field');
+      const value = chip.getAttribute('data-fill-value') || '';
+      if (field === 'subject') nameHelperFields.subject.value = value;
+      if (field === 'topic') nameHelperFields.topic.value = value;
+      recompute();
+    });
 
     function getCheckedStatuses() {
       return nameHelperFields.status.filter((cb) => cb.checked).map((cb) => cb.value);
@@ -2498,6 +2788,7 @@
   // user confirms with a non-empty result — cancelling never calls it.
   function openNameHelper(existingName, onConfirm) {
     const modal = ensureNameHelperModal();
+    refreshNameHelperSuggestions();
     const parsed = parseSubEnquiryName(existingName || '');
     nameHelperFields.status.forEach((cb) => { cb.checked = parsed.status.includes(cb.value); });
     nameHelperFields.subject.value = parsed.subject;
