@@ -1,0 +1,909 @@
+/* ---------------------------------------------------------
+   Summit — draft.css
+   Section 5: Draft tab — keyword extraction & tagging.
+   Reuses .summit-btn / .summit-select / .summit-toolbar
+   primitives from base.css + theme.css (Section 10.2).
+--------------------------------------------------------- */
+
+.draft {
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- Sub-tab navigation (Tag / Find / Search / Import-Export) ---------- */
+
+.draft-subnav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--gray-line);
+  background: var(--stone-raised);
+  flex: none;
+}
+
+.draft-subtab {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--gray);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.draft-subtab:hover:not(:disabled) {
+  background: var(--bronze-soft);
+  color: var(--ink);
+}
+
+.draft-subtab[aria-selected="true"] {
+  background: var(--bronze);
+  color: var(--stone-raised);
+}
+
+.draft-subtab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.draft-subpanel {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* A subpanel with [hidden] must actually disappear, no matter what
+   display value a more specific rule below gives it — this was the
+   root cause of Tag / Find & Search / Import-Export bleeding into
+   each other. Author rules always beat the browser's UA [hidden]
+   rule at equal specificity, so this needs to be explicit. */
+.draft-subpanel[hidden] {
+  display: none !important;
+}
+
+.draft-find-layout {
+  height: 100%;
+}
+
+.draft-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr) minmax(300px, 1.2fr);
+  gap: 1px;
+  height: 100%;
+}
+
+.draft-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px 18px;
+  overflow-y: auto;
+  background: var(--stone);
+}
+
+.draft-col--extract,
+.draft-col--tree {
+  border-right: 1px solid var(--gray-line);
+}
+
+.draft-col__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.draft-col__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.draft-col__title {
+  font-family: 'Fraunces', serif;
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--ink);
+}
+
+.draft-col__subtitle {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gray);
+  margin: 16px 0 8px;
+}
+
+.draft-col__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.draft-empty-note {
+  font-size: 13px;
+  color: var(--gray);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* ---------- 5.1 Paste & extract ---------- */
+
+.draft-textarea {
+  width: 100%;
+  min-height: 160px;
+  resize: vertical;
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  background: var(--stone-raised);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+  padding: 10px 12px;
+}
+
+.draft-textarea:focus-visible {
+  outline: 2px solid var(--bronze);
+  outline-offset: 1px;
+}
+
+.draft-textarea--template {
+  min-height: 220px;
+}
+
+.draft-input {
+  width: 100%;
+  height: 34px;
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  background: var(--stone-raised);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13.5px;
+  padding: 0 12px;
+}
+
+.draft-input:focus-visible {
+  outline: 2px solid var(--bronze);
+  outline-offset: 1px;
+}
+
+.draft-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 32px;
+}
+
+.draft-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 6px 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--gray-line);
+  background: var(--stone-raised);
+  color: var(--ink);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+}
+
+.draft-chip::before {
+  content: "#";
+  color: var(--bronze);
+}
+
+.draft-chip__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--gray);
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+}
+
+.draft-chip__remove:hover {
+  background: var(--bronze-soft);
+  color: var(--bronze-deep);
+}
+
+.draft-keywords--filed .draft-chip {
+  background: var(--bronze-soft);
+  border-color: transparent;
+}
+
+.draft-file-panel {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--gray-line);
+}
+
+.draft-file-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.draft-file-select {
+  width: 100%;
+}
+
+.draft-file-select:disabled {
+  opacity: 0.45;
+}
+
+/* ---------- Searchable combobox (type-to-filter over a <select>) ---------- */
+
+.draft-combobox {
+  position: relative;
+  width: 100%;
+}
+
+.draft-combobox__native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.draft-combobox__input {
+  width: 100%;
+  background: var(--stone-raised);
+  color: var(--ink);
+  border: 1px solid var(--gray-line);
+}
+
+.draft-combobox__input::placeholder {
+  color: var(--gray);
+}
+
+.draft-combobox__input:disabled {
+  opacity: 0.45;
+}
+
+.draft-combobox__menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--stone-raised);
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.14);
+}
+
+.draft-combobox__option,
+.draft-combobox__empty {
+  padding: 7px 10px;
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.draft-combobox__option:hover {
+  background: var(--bronze-soft);
+}
+
+.draft-combobox__option--new {
+  margin-top: 2px;
+  border-top: 1px solid var(--gray-line);
+  border-radius: 0 0 5px 5px;
+  color: var(--bronze-deep);
+  font-weight: 500;
+}
+
+.draft-combobox__empty {
+  color: var(--gray);
+  cursor: default;
+}
+
+/* ---------- 5.2 Hierarchy tree ---------- */
+
+.draft-tree {
+  font-size: 13.5px;
+}
+
+.draft-node {
+  border-radius: 6px;
+}
+
+.draft-node__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  border-radius: 6px;
+  padding: 0 4px;
+}
+
+.draft-node__row:hover {
+  background: var(--bronze-soft);
+}
+
+.draft-node__row.is-selected {
+  background: var(--bronze-soft);
+  color: var(--bronze-deep);
+  font-weight: 600;
+}
+
+.draft-node__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: none;
+  color: var(--gray);
+  font-size: 10px;
+  padding: 0;
+  flex: none;
+}
+
+.draft-node__toggle.is-leaf {
+  visibility: hidden;
+}
+
+.draft-node__label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  padding: 4px 2px;
+}
+
+.draft-node__count {
+  flex: none;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  color: var(--gray);
+  margin-right: 2px;
+}
+
+.draft-node__actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.draft-node__row:hover .draft-node__actions,
+.draft-node__row:focus-within .draft-node__actions {
+  display: flex;
+}
+
+.draft-node__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--gray);
+  font-size: 11px;
+  padding: 0;
+}
+
+.draft-node__action:hover {
+  background: var(--stone-raised);
+  color: var(--ink);
+}
+
+.draft-node__children {
+  margin-left: 20px;
+  border-left: 1px solid var(--gray-line);
+  padding-left: 4px;
+}
+
+.draft-node[data-level="scheme"] > .draft-node__row .draft-node__label { font-weight: 600; }
+.draft-node[data-level="subenquiry"] > .draft-node__row::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--bronze);
+  flex: none;
+  margin-right: 2px;
+}
+
+/* ---------- 5.3 Template linking / detail panel ---------- */
+
+.draft-detail__empty {
+  color: var(--gray);
+  font-size: 13.5px;
+  line-height: 1.5;
+  margin-top: 8px;
+}
+
+.draft-detail__path {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11.5px;
+  color: var(--gray);
+  margin: 0 0 4px;
+  word-break: break-word;
+}
+
+.draft-template-status {
+  font-size: 12px;
+  color: var(--gray);
+}
+
+.draft-template-status.is-saved {
+  color: var(--bronze-deep);
+}
+
+@media (max-width: 900px) {
+  .draft-layout {
+    grid-template-columns: 1fr;
+    grid-auto-rows: minmax(240px, auto);
+    overflow-y: auto;
+  }
+  .draft-col {
+    overflow-y: visible;
+    border-right: none !important;
+    border-bottom: 1px solid var(--gray-line);
+  }
+  .draft-find-layout--triple {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- 6. Template Finder ---------- */
+
+.draft-find-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  gap: 1px;
+}
+
+.draft-find-layout--triple {
+  grid-template-columns: repeat(3, minmax(240px, 1fr));
+}
+
+.draft-col--find-filters {
+  border-right: 1px solid var(--gray-line);
+}
+
+.draft-find-layout--triple .draft-col--find-filters:last-child {
+  border-right: none;
+}
+
+.draft-col__subhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 18px 0 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--gray-line);
+}
+
+.draft-col__subhead .draft-col__subtitle {
+  margin: 0;
+}
+
+.draft-field-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gray);
+  margin: 12px 0 4px;
+}
+
+.draft-field-label:first-of-type {
+  margin-top: 0;
+}
+
+.draft-search-input {
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--gray-line);
+  background: var(--stone-raised);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 0 10px;
+}
+
+.draft-search-input:focus-visible {
+  outline: 2px solid var(--bronze);
+  outline-offset: 1px;
+}
+
+.draft-find-select {
+  width: 100%;
+}
+
+.draft-find-select:disabled {
+  opacity: 0.45;
+}
+
+#draft-find-reset-btn {
+  margin-top: 16px;
+  align-self: flex-start;
+}
+
+.draft-find-count {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11.5px;
+  color: var(--gray);
+}
+
+/* ---------- Section 8: Import & Export — batch controls ---------- */
+
+.draft-batch-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.draft-batch-controls__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.draft-find-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.draft-result {
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  background: var(--stone-raised);
+  padding: 10px 12px;
+}
+
+.draft-result__path {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--gray);
+  margin: 0 0 6px;
+}
+
+.draft-result__keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.draft-result__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--bronze-deep);
+  background: var(--bronze-soft);
+  border-radius: 999px;
+  padding: 2px 9px;
+  margin: 0 0 8px;
+}
+
+.draft-result__snippet {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.draft-result__snippet mark {
+  background: var(--bronze-soft);
+  color: var(--bronze-deep);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.draft-result__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.draft-result__toggle {
+  align-self: flex-start;
+  margin-top: 4px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--bronze);
+  background: none;
+  border: none;
+  padding: 0;
+  height: auto;
+}
+
+.draft-result__toggle:hover {
+  text-decoration: underline;
+}
+
+/* ---------- 6/7. Find & Search (filter / reverse / deep thinking) ---------- */
+
+.draft-search-help {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--gray);
+  margin: 0 0 14px;
+}
+
+.draft-deep-index-status {
+  font-size: 12px;
+  color: var(--gray);
+  margin: 10px 0 0;
+}
+
+.draft-result__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.draft-result__header .draft-result__path {
+  margin: 0;
+}
+
+.draft-result__score {
+  flex: none;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--bronze-deep);
+  background: var(--bronze-soft);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.draft-chip--match {
+  border-color: var(--bronze);
+  background: var(--bronze-soft);
+}
+
+.draft-chip--match::before {
+  color: var(--bronze-deep);
+}
+
+
+/* ---------- Categorization Editor: outline import/export ---------- */
+
+.draft-hierarchy-io {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--gray-line);
+}
+
+.draft-hierarchy-io__summary {
+  cursor: pointer;
+  list-style: none;
+  margin: 0;
+  user-select: none;
+}
+
+.draft-hierarchy-io__summary::-webkit-details-marker {
+  display: none;
+}
+
+.draft-hierarchy-io__summary::before {
+  content: '\25B8';
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 0.12s ease;
+}
+
+.draft-hierarchy-io[open] > .draft-hierarchy-io__summary::before {
+  transform: rotate(90deg);
+}
+
+.draft-hierarchy-io__hint {
+  font-size: 12px;
+  color: var(--gray);
+  line-height: 1.5;
+  margin: 8px 0;
+}
+
+.draft-hierarchy-io__textarea {
+  min-height: 130px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12.5px;
+  white-space: pre;
+}
+
+.draft-hierarchy-io__status {
+  font-size: 12px;
+  color: var(--gray);
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
+
+/* ---------- 12. Sub-Enquiry Name Helper ---------- */
+/* Layout only — colors reuse .summit-modal / .summit-select /
+   .draft-field-label / .draft-search-input, so it themes for free. */
+
+.draft-name-helper__panel {
+  max-width: 460px;
+}
+
+.draft-quick-add__panel {
+  max-width: 420px;
+}
+
+.draft-quick-add__panel .summit-select {
+  width: 100%;
+  box-sizing: border-box;
+  display: block;
+  margin-bottom: 10px;
+}
+
+.draft-hierarchy-io {
+  margin-top: 16px;
+  border-top: 1px solid var(--border, #ddd);
+  padding-top: 12px;
+}
+
+.draft-hierarchy-io__summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.draft-hierarchy-io__summary::-webkit-details-marker {
+  display: none;
+}
+
+.draft-hierarchy-io__summary::before {
+  content: '\25B8';
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 0.15s ease;
+}
+
+.draft-hierarchy-io[open] .draft-hierarchy-io__summary::before {
+  transform: rotate(90deg);
+}
+
+.draft-hierarchy-io .draft-textarea {
+  min-height: 110px;
+  margin-top: 8px;
+}
+
+.draft-name-helper__hint {
+  font-size: 12px;
+  color: var(--gray);
+  line-height: 1.5;
+  margin: 0 0 14px;
+}
+
+.draft-name-helper__hint span {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+}
+
+.draft-name-helper__select,
+.draft-name-helper__input,
+.draft-name-helper__textarea,
+.draft-name-helper__preview {
+  width: 100%;
+  box-sizing: border-box;
+  display: block;
+}
+
+.draft-name-helper__checks {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.draft-name-helper__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.draft-name-helper__check input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--bronze);
+  cursor: pointer;
+}
+
+.draft-name-helper__textarea {
+  resize: vertical;
+  padding: 8px 10px;
+  line-height: 1.4;
+}
+
+.draft-name-helper__preview {
+  font-weight: 600;
+  color: var(--bronze-deep);
+}
+
+.draft-name-helper__existing-hint {
+  font-size: 12px;
+  line-height: 1.9;
+  color: var(--gray);
+  margin: -6px 0 14px;
+}
+
+.draft-name-helper__existing-hint:empty {
+  margin: 0;
+}
+
+.draft-name-helper__chip-label {
+  font-weight: 600;
+  color: var(--gray);
+  margin-right: 2px;
+}
+
+.draft-name-helper__chip {
+  display: inline-block;
+  font: inherit;
+  font-size: 11.5px;
+  padding: 2px 8px;
+  margin: 2px 2px 2px 0;
+  border: 1px solid var(--border, #ddd);
+  border-radius: 999px;
+  background: var(--panel-alt, #f4f4f2);
+  color: inherit;
+  cursor: pointer;
+}
+
+.draft-name-helper__chip:hover {
+  border-color: var(--bronze);
+  color: var(--bronze-deep);
+}
+
+.draft-field-label span {
+  text-transform: none;
+  font-weight: 400;
+  letter-spacing: 0;
+  opacity: 0.75;
+}
