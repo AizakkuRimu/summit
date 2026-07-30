@@ -464,11 +464,30 @@
           <div class="draft-col draft-col--tree">
             <div class="draft-col__header">
               <h2 class="draft-col__title">Hierarchy</h2>
-              <button type="button" class="summit-btn summit-btn--glyph" id="draft-add-scheme-btn" title="Add scheme" aria-label="Add scheme">+</button>
+              <div class="draft-col__header-actions">
+                <button type="button" class="summit-btn summit-btn--glyph" id="draft-quick-add-btn" title="Quick add a full Scheme/Category/Enquiry/Sub-Enquiry set" aria-label="Quick add">⚡</button>
+                <button type="button" class="summit-btn summit-btn--glyph" id="draft-add-scheme-btn" title="Add scheme" aria-label="Add scheme">+</button>
+              </div>
             </div>
             <div class="draft-tree" id="draft-tree" role="tree" aria-label="Scheme, category, enquiry, sub-enquiry hierarchy">
               <p class="draft-empty-note" id="draft-tree-empty">No schemes yet — click + to add one.</p>
             </div>
+
+            <details class="draft-hierarchy-io">
+              <summary class="draft-col__subtitle draft-hierarchy-io__summary">Import / export hierarchy</summary>
+              <p class="draft-search-help">One name per line. Indent 2 spaces per level: Scheme, then Category, then Enquiry, then Sub-Enquiry. Import only ever adds — it never deletes or renames.</p>
+              <textarea id="draft-hierarchy-io-input" class="draft-textarea" placeholder="Scheme A&#10;  Category B&#10;    Enquiry C&#10;      Sub-Enquiry D" aria-label="Hierarchy outline text to import or export"></textarea>
+              <div class="draft-col__actions">
+                <button type="button" class="summit-btn summit-btn--primary" id="draft-hierarchy-import-btn">Import from text above</button>
+                <button type="button" class="summit-btn" id="draft-hierarchy-import-file-btn">Upload file…</button>
+                <input type="file" id="draft-hierarchy-import-file" accept=".txt" hidden>
+              </div>
+              <div class="draft-col__actions">
+                <button type="button" class="summit-btn" id="draft-hierarchy-export-btn">Download .txt</button>
+                <button type="button" class="summit-btn" id="draft-hierarchy-copy-btn">Copy to clipboard</button>
+              </div>
+              <p class="draft-template-status" id="draft-hierarchy-io-status" aria-live="polite"></p>
+            </details>
           </div>
 
           <!-- 5.3 Template linking -->
@@ -482,6 +501,10 @@
 
               <h3 class="draft-col__subtitle">Keywords filed here</h3>
               <div class="draft-keywords draft-keywords--filed" id="draft-detail-keywords"></div>
+
+              <label class="draft-field-label" for="draft-label-input">Name/Term <span>(a hashtag-style tag to sort templates by — independent of the hierarchy above)</span></label>
+              <input type="text" class="draft-search-input" id="draft-label-input" list="draft-label-datalist" placeholder="e.g. a person's name, or a recurring term…" autocomplete="off">
+              <datalist id="draft-label-datalist"></datalist>
 
               <h3 class="draft-col__subtitle">Template</h3>
               <textarea id="draft-template-input" class="draft-textarea draft-textarea--template" placeholder="Paste or type the template text to attach to this Sub-Enquiry…" aria-label="Template text for this Sub-Enquiry"></textarea>
@@ -523,6 +546,9 @@
 
               <label class="draft-field-label" for="draft-find-subenquiry">Sub-Enquiry</label>
               <select id="draft-find-subenquiry" class="summit-select draft-find-select" aria-label="Filter by sub-enquiry" disabled></select>
+
+              <label class="draft-field-label" for="draft-find-label">Name/Term</label>
+              <select id="draft-find-label" class="summit-select draft-find-select" aria-label="Filter by Name/Term tag"></select>
 
               <button type="button" class="summit-btn" id="draft-find-reset-btn">Reset filters</button>
 
