@@ -3199,6 +3199,49 @@
     getHierarchy: () => state,
     isEmpty: () => state.schemeIds.length === 0,
 
+    // Flat list of every Sub-Enquiry with its full breadcrumb path —
+    // used by Summit Bot's /duplicate picker so it doesn't need to
+    // walk the hierarchy itself.
+    listSubEnquiries() {
+      return Object.keys(state.subEnquiries).map((id) => ({
+        id,
+        name: state.subEnquiries[id].name,
+        path: pathForSubEnquiry(id)
+      })).sort((a, b) => a.name.localeCompare(b.name));
+    },
+
+    // Duplicates a Sub-Enquiry in place (same Enquiry parent), copying
+    // its keywords/template/label. Returns the new id, or null if the
+    // source no longer exists. Refreshes the tree/detail so the copy
+    // is visible immediately, whichever tab is showing.
+    duplicateSubEnquiry(id) {
+      const source = state.subEnquiries[id];
+      if (!source) return null;
+      const newId = uid('subenquiry');
+      let name = source.name + ' (Copy)';
+      const enq = state.enquiries[source.enquiryId];
+      const siblingNames = new Set(enq.subEnquiryIds.map((sid) => state.subEnquiries[sid].name));
+      let n = 2;
+      while (siblingNames.has(name)) { name = source.name + ' (Copy ' + n + ')'; n += 1; }
+      state.subEnquiries[newId] = {
+        id: newId,
+        name,
+        enquiryId: source.enquiryId,
+        keywords: (source.keywords || []).slice(),
+        template: source.template || '',
+        label: source.label || ''
+      };
+      enq.subEnquiryIds.push(newId);
+      const sourceIndex = enq.subEnquiryIds.indexOf(id);
+      if (sourceIndex !== -1) {
+        enq.subEnquiryIds.splice(enq.subEnquiryIds.indexOf(newId), 1);
+        enq.subEnquiryIds.splice(sourceIndex + 1, 0, newId);
+      }
+      showToast('Duplicated "' + name + '"');
+      window.Summit.draft.focusSubEnquiry(newId);
+      return newId;
+    },
+
     // Exposed so other tabs can reuse the exact same stop-word/keyword
     // logic instead of re-implementing it (Section 9: Smart Sub-Enquiry
     // suggestions in Peaks).
