@@ -179,10 +179,16 @@ th.peaks-rowhead {
   position: absolute;
   top: 0;
   right: 0;
-  width: 7px;
+  width: 10px;
   height: 100%;
   cursor: col-resize;
   z-index: 5;
+}
+
+.peaks-colhead__resize:hover,
+.peaks-colhead__resize.is-resizing {
+  background: var(--bronze);
+  opacity: 0.5;
 }
 
 .peaks-rowhead__resize {
