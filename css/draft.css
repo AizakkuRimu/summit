@@ -137,6 +137,72 @@
   line-height: 1.5;
 }
 
+/* ---------- 5.2 Hierarchy search toolbar ---------- */
+
+.draft-tree-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-bottom: 10px;
+}
+
+.draft-tree-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.draft-tree-search__input {
+  flex: 1 1 120px;
+  min-width: 0;
+  width: auto;
+}
+
+.draft-tree-search__level {
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--gray-line);
+  background: var(--stone-raised);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 0 8px;
+}
+
+.draft-tree-search__level:focus-visible,
+.draft-tree-search__input:focus-visible {
+  outline: 2px solid var(--bronze);
+  outline-offset: 1px;
+}
+
+.draft-save-status {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--gray);
+  white-space: normal;
+  word-break: break-word;
+  flex: 1 1 100%;
+}
+
+.draft-save-status.is-saved {
+  color: var(--bronze-deep);
+}
+
+.draft-node__row.is-search-match {
+  background: var(--bronze-soft);
+}
+
+.draft-node__row.is-search-match .draft-node__label {
+  color: var(--bronze-deep);
+  font-weight: 600;
+}
+
 /* ---------- 5.1 Paste & extract ---------- */
 
 .draft-textarea {
