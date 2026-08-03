@@ -517,43 +517,22 @@
     if (!e.target.classList.contains('peaks-colhead__resize')) return;
     const th = e.target.parentElement;
     const c = +th.dataset.col;
-    colResize = { cols: columnsToResizeWith(c), startX: e.clientX, startWidth: colWidths[c] };
+    colResize = { c, startX: e.clientX, startWidth: colWidths[c] };
     e.target.classList.add('is-resizing');
     scrollEl.classList.add('is-resizing');
     e.preventDefault();
   });
 
-  // Double-clicking a column's resize line auto-fits it (or every column
-  // in the current selection, if that selection spans whole columns) to
-  // a width that comfortably wraps ~5 average words per line.
+  // Double-clicking a column's resize line auto-fits just that column
+  // to a width that comfortably wraps ~5 average words per line.
   headerRow.addEventListener('dblclick', (e) => {
     if (!e.target.classList.contains('peaks-colhead__resize')) return;
     const th = e.target.parentElement;
     const c = +th.dataset.col;
-    columnsToResizeWith(c).forEach((cc) => {
-      colWidths[cc] = DEFAULT_COL_WIDTH;
-      colgroup.children[cc + 1].style.width = DEFAULT_COL_WIDTH + 'px';
-    });
+    colWidths[c] = DEFAULT_COL_WIDTH;
+    colgroup.children[c + 1].style.width = DEFAULT_COL_WIDTH + 'px';
     e.preventDefault();
   });
-
-  // When the column being dragged/double-clicked is part of a
-  // whole-column range selection (the kind a column-header click makes),
-  // every column in that range resizes together to the same final width.
-  // Otherwise, only the dragged column itself is affected.
-  function columnsToResizeWith(c) {
-    if (selection) {
-      const cMin = Math.min(selection.c1, selection.c2);
-      const cMax = Math.max(selection.c1, selection.c2);
-      const isFullColumnSelection = selection.r1 === 0 && selection.r2 === numRows - 1;
-      if (isFullColumnSelection && cMax > cMin && c >= cMin && c <= cMax) {
-        const cols = [];
-        for (let i = cMin; i <= cMax; i++) cols.push(i);
-        return cols;
-      }
-    }
-    return [c];
-  }
 
   tbody.addEventListener('mousedown', (e) => {
     if (!e.target.classList.contains('peaks-rowhead__resize')) return;
@@ -568,10 +547,8 @@
     if (colResize) {
       const dx = e.clientX - colResize.startX;
       const w = Math.max(MIN_COL_WIDTH, colResize.startWidth + dx);
-      colResize.cols.forEach((cc) => {
-        colWidths[cc] = w;
-        colgroup.children[cc + 1].style.width = w + 'px';
-      });
+      colWidths[colResize.c] = w;
+      colgroup.children[colResize.c + 1].style.width = w + 'px';
     } else if (rowResize) {
       const dy = e.clientY - rowResize.startY;
       const h = Math.max(MIN_ROW_HEIGHT, rowResize.startHeight + dy);
