@@ -2891,7 +2891,7 @@
   // ============================================================
   // Keeps a clean, consistent naming convention for Sub-Enquiries:
   //
-  //   [SC/PR or Foreigner] - [Main Subject Matter] : [Specific Topic]
+  //   [SC/PR/Foreigner/Anonymous] - [Main Subject Matter] : [Specific Topic]
   //   - [More detailed information, if necessary]
   //
   // (the line break between the two lines above is flattened to a
@@ -2901,7 +2901,7 @@
   // Sub-Enquiry node, and the "+ New sub-enquiry…" option in the
   // quick-add cascading picker.
 
-  const NAME_HELPER_STATUSES = ['SC', 'PR', 'Foreigner'];
+  const NAME_HELPER_STATUSES = ['SC', 'PR', 'Foreigner', 'Anonymous'];
   const NAME_HELPER_REQUEST_TYPES = ['request', 'enquiry'];
 
   let nameHelperEl = null;
@@ -3067,6 +3067,7 @@
           '<label class="draft-name-helper__check"><input type="checkbox" value="SC" /> SC</label>' +
           '<label class="draft-name-helper__check"><input type="checkbox" value="PR" /> PR</label>' +
           '<label class="draft-name-helper__check"><input type="checkbox" value="Foreigner" /> Foreigner</label>' +
+          '<label class="draft-name-helper__check"><input type="checkbox" value="Anonymous" /> Anonymous</label>' +
         '</div>' +
 
         '<label class="draft-field-label" for="draft-name-helper-subject">Main Subject Matter</label>' +
