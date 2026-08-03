@@ -34,6 +34,17 @@
 
   const expandedIds = new Set(); // runtime-only tree expand/collapse state
 
+  // ---------- Hierarchy search toolbar ----------
+  // Filters the tree to one level (Scheme/Category/Enquiry/Sub-Enquiry)
+  // at a time. Ancestors of a match are force-shown/expanded so the
+  // match is reachable even if the user had it collapsed; anything
+  // below the searched level is untouched by the filter, so manually
+  // expanding a matched node still shows its real children normally.
+  let treeSearchQuery = '';
+  let treeSearchLevel = 'subenquiry';
+  const LEVEL_DEPTH = { scheme: 0, category: 1, enquiry: 2, subenquiry: 3 };
+  const LEVEL_LABELS = { scheme: 'Schemes', category: 'Categories', enquiry: 'Enquiries', subenquiry: 'Sub-Enquiries' };
+
   // ============================================================
   // DOM references
   // ============================================================
@@ -55,6 +66,9 @@
   const quickAddBtn = document.getElementById('draft-quick-add-btn');
   const treeEl = document.getElementById('draft-tree');
   const treeEmptyNote = document.getElementById('draft-tree-empty');
+  const treeSearchInput = document.getElementById('draft-tree-search-input');
+  const treeSearchLevelSelect = document.getElementById('draft-tree-search-level');
+  const saveStatusEl = document.getElementById('draft-save-status');
 
   const detailEmpty = document.getElementById('draft-detail-empty');
   const detailContent = document.getElementById('draft-detail-content');
@@ -333,14 +347,86 @@
     );
   }
 
+  // Builds the match/visibility sets for the current search box + level.
+  // Returns null when the box is empty (renderTree then renders as if
+  // there were no search at all).
+  function computeSearchVisibility() {
+    const q = treeSearchQuery.trim().toLowerCase();
+    if (!q) return null;
+    const depth = LEVEL_DEPTH[treeSearchLevel];
+    const matchIds = new Set();
+    const visibleIds = new Set();
+    const forceExpand = new Set();
+    const addAncestors = (ids) => { ids.forEach((id) => { visibleIds.add(id); forceExpand.add(id); }); };
+
+    if (treeSearchLevel === 'scheme') {
+      Object.keys(state.schemes).forEach((id) => {
+        if (state.schemes[id].name.toLowerCase().includes(q)) { matchIds.add(id); visibleIds.add(id); }
+      });
+    } else if (treeSearchLevel === 'category') {
+      Object.keys(state.categories).forEach((id) => {
+        const cat = state.categories[id];
+        if (cat.name.toLowerCase().includes(q)) {
+          matchIds.add(id); visibleIds.add(id);
+          addAncestors([cat.schemeId]);
+        }
+      });
+    } else if (treeSearchLevel === 'enquiry') {
+      Object.keys(state.enquiries).forEach((id) => {
+        const enq = state.enquiries[id];
+        if (enq.name.toLowerCase().includes(q)) {
+          matchIds.add(id); visibleIds.add(id);
+          const cat = state.categories[enq.categoryId];
+          addAncestors([cat.schemeId, enq.categoryId]);
+        }
+      });
+    } else {
+      Object.keys(state.subEnquiries).forEach((id) => {
+        const sub = state.subEnquiries[id];
+        if (sub.name.toLowerCase().includes(q)) {
+          matchIds.add(id); visibleIds.add(id);
+          const enq = state.enquiries[sub.enquiryId];
+          const cat = state.categories[enq.categoryId];
+          addAncestors([cat.schemeId, enq.categoryId, sub.enquiryId]);
+        }
+      });
+    }
+
+    return { depth, matchIds, visibleIds, forceExpand };
+  }
+
+  // At the searched level itself, only matches survive; above it, only
+  // branches leading toward a match survive; below it, the search
+  // doesn't apply (normal expand/collapse takes over again).
+  function filterIdsForDepth(ids, depth, search) {
+    if (!search) return ids;
+    if (depth < search.depth) return ids.filter((id) => search.visibleIds.has(id));
+    if (depth === search.depth) return ids.filter((id) => search.matchIds.has(id));
+    return ids;
+  }
+
+  function isForceExpanded(id, depth, search) {
+    return !!search && depth < search.depth && search.forceExpand.has(id);
+  }
+
+
   function renderTree() {
     treeEl.innerHTML = '';
     if (state.schemeIds.length === 0) {
       treeEl.appendChild(treeEmptyNote);
       return;
     }
-    sortedByName(state.schemeIds, state.schemes).forEach((schemeId) => {
-      treeEl.appendChild(renderSchemeNode(schemeId));
+    const search = computeSearchVisibility();
+    if (search && search.matchIds.size === 0) {
+      const note = document.createElement('p');
+      note.className = 'draft-empty-note';
+      note.textContent = 'No ' + LEVEL_LABELS[treeSearchLevel] + ' match "' + treeSearchQuery.trim() + '".';
+      treeEl.appendChild(note);
+      return;
+    }
+    const schemeIds = filterIdsForDepth(state.schemeIds, 0, search);
+    sortedByName(schemeIds, state.schemes).forEach((schemeId) => {
+      treeEl.appendChild(renderSchemeNode(schemeId, search));
     });
   }
 
@@ -417,16 +503,17 @@
     return btn;
   }
 
-  function makeNodeRow({ id, level, name, hasChildren, childCount, isSelected, onToggle, onSelect, onAdd, onRename, onDelete, onCopy }) {
+  function makeNodeRow({ id, level, name, hasChildren, childCount, isSelected, isOpen, isMatch, onToggle, onSelect, onAdd, onRename, onDelete, onCopy }) {
     const row = document.createElement('div');
-    row.className = 'draft-node__row' + (isSelected ? ' is-selected' : '');
+    row.className = 'draft-node__row' + (isSelected ? ' is-selected' : '') + (isMatch ? ' is-search-match' : '');
     row.setAttribute('role', 'treeitem');
 
+    const open = typeof isOpen === 'boolean' ? isOpen : expandedIds.has(id);
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'draft-node__toggle' + (hasChildren ? '' : ' is-leaf');
     toggle.setAttribute('aria-label', hasChildren ? 'Expand/collapse' : '');
-    toggle.textContent = hasChildren ? (expandedIds.has(id) ? '\u25BE' : '\u25B8') : '\u25B8';
+    toggle.textContent = hasChildren ? (open ? '\u25BE' : '\u25B8') : '\u25B8';
     if (hasChildren) {
       toggle.addEventListener('click', (e) => { e.stopPropagation(); onToggle(); });
     }
@@ -460,7 +547,7 @@
     return row;
   }
 
-  function renderSchemeNode(schemeId) {
+  function renderSchemeNode(schemeId, search) {
     const scheme = state.schemes[schemeId];
     const wrap = document.createElement('div');
     wrap.className = 'draft-node';
@@ -468,8 +555,10 @@
     wrap.dataset.id = schemeId;
 
     const hasChildren = scheme.categoryIds.length > 0;
+    const isOpen = expandedIds.has(schemeId) || isForceExpanded(schemeId, 0, search);
+    const isMatch = !!search && search.matchIds.has(schemeId);
     const row = makeNodeRow({
-      id: schemeId, level: 'scheme', name: scheme.name, hasChildren,
+      id: schemeId, level: 'scheme', name: scheme.name, hasChildren, isOpen, isMatch,
       onToggle: () => { toggleExpand(schemeId); },
       onSelect: () => { toggleExpand(schemeId); },
       onAdd: () => {
@@ -493,16 +582,17 @@
     });
     wrap.appendChild(row);
 
-    if (hasChildren && expandedIds.has(schemeId)) {
+    if (hasChildren && isOpen) {
       const children = document.createElement('div');
       children.className = 'draft-node__children';
-      sortedByName(scheme.categoryIds, state.categories).forEach((catId) => children.appendChild(renderCategoryNode(catId)));
+      const catIds = filterIdsForDepth(scheme.categoryIds, 1, search);
+      sortedByName(catIds, state.categories).forEach((catId) => children.appendChild(renderCategoryNode(catId, search)));
       wrap.appendChild(children);
     }
     return wrap;
   }
 
-  function renderCategoryNode(categoryId) {
+  function renderCategoryNode(categoryId, search) {
     const cat = state.categories[categoryId];
     const wrap = document.createElement('div');
     wrap.className = 'draft-node';
@@ -510,8 +600,10 @@
     wrap.dataset.id = categoryId;
 
     const hasChildren = cat.enquiryIds.length > 0;
+    const isOpen = expandedIds.has(categoryId) || isForceExpanded(categoryId, 1, search);
+    const isMatch = !!search && search.matchIds.has(categoryId);
     const row = makeNodeRow({
-      id: categoryId, level: 'category', name: cat.name, hasChildren,
+      id: categoryId, level: 'category', name: cat.name, hasChildren, isOpen, isMatch,
       onToggle: () => { toggleExpand(categoryId); },
       onSelect: () => { toggleExpand(categoryId); },
       onAdd: () => {
@@ -535,16 +627,17 @@
     });
     wrap.appendChild(row);
 
-    if (hasChildren && expandedIds.has(categoryId)) {
+    if (hasChildren && isOpen) {
       const children = document.createElement('div');
       children.className = 'draft-node__children';
-      sortedByName(cat.enquiryIds, state.enquiries).forEach((enqId) => children.appendChild(renderEnquiryNode(enqId)));
+      const enqIds = filterIdsForDepth(cat.enquiryIds, 2, search);
+      sortedByName(enqIds, state.enquiries).forEach((enqId) => children.appendChild(renderEnquiryNode(enqId, search)));
       wrap.appendChild(children);
     }
     return wrap;
   }
 
-  function renderEnquiryNode(enquiryId) {
+  function renderEnquiryNode(enquiryId, search) {
     const enq = state.enquiries[enquiryId];
     const wrap = document.createElement('div');
     wrap.className = 'draft-node';
@@ -552,8 +645,10 @@
     wrap.dataset.id = enquiryId;
 
     const hasChildren = enq.subEnquiryIds.length > 0;
+    const isOpen = expandedIds.has(enquiryId) || isForceExpanded(enquiryId, 2, search);
+    const isMatch = !!search && search.matchIds.has(enquiryId);
     const row = makeNodeRow({
-      id: enquiryId, level: 'enquiry', name: enq.name, hasChildren,
+      id: enquiryId, level: 'enquiry', name: enq.name, hasChildren, isOpen, isMatch,
       onToggle: () => { toggleExpand(enquiryId); },
       onSelect: () => { toggleExpand(enquiryId); },
       onAdd: () => {
@@ -577,26 +672,29 @@
     });
     wrap.appendChild(row);
 
-    if (hasChildren && expandedIds.has(enquiryId)) {
+    if (hasChildren && isOpen) {
       const children = document.createElement('div');
       children.className = 'draft-node__children';
-      sortedByName(enq.subEnquiryIds, state.subEnquiries).forEach((subId) => children.appendChild(renderSubEnquiryNode(subId)));
+      const subIds = filterIdsForDepth(enq.subEnquiryIds, 3, search);
+      sortedByName(subIds, state.subEnquiries).forEach((subId) => children.appendChild(renderSubEnquiryNode(subId, search)));
       wrap.appendChild(children);
     }
     return wrap;
   }
 
-  function renderSubEnquiryNode(subId) {
+  function renderSubEnquiryNode(subId, search) {
     const sub = state.subEnquiries[subId];
     const wrap = document.createElement('div');
     wrap.className = 'draft-node';
     wrap.dataset.level = 'subenquiry';
     wrap.dataset.id = subId;
 
+    const isMatch = !!search && search.matchIds.has(subId);
     const row = makeNodeRow({
       id: subId, level: 'subenquiry', name: sub.name, hasChildren: false,
       childCount: sub.keywords.length,
       isSelected: state.selectedSubEnquiryId === subId,
+      isMatch,
       onToggle: () => {},
       onSelect: () => {
         state.selectedSubEnquiryId = subId;
@@ -623,6 +721,20 @@
   function toggleExpand(id) {
     if (expandedIds.has(id)) expandedIds.delete(id); else expandedIds.add(id);
     renderTree();
+  }
+
+  if (treeSearchInput) {
+    treeSearchInput.addEventListener('input', () => {
+      treeSearchQuery = treeSearchInput.value;
+      renderTree();
+    });
+  }
+  if (treeSearchLevelSelect) {
+    treeSearchLevelSelect.value = treeSearchLevel;
+    treeSearchLevelSelect.addEventListener('change', () => {
+      treeSearchLevel = treeSearchLevelSelect.value;
+      renderTree();
+    });
   }
 
   addSchemeBtn.addEventListener('click', () => {
@@ -2375,6 +2487,40 @@
     return d.getFullYear() + pad2(d.getMonth() + 1, 2) + pad2(d.getDate(), 2) +
       '-' + pad2(d.getHours(), 2) + pad2(d.getMinutes(), 2);
   }
+
+  // ---------- Hierarchy "saved" indicator ----------
+  // Nothing in this app persists across a reload — Export .txt and
+  // Copy to clipboard are the only ways the hierarchy actually leaves
+  // the browser tab, so those two count as "saving" it. Tracked in
+  // memory only, same lifetime as everything else here.
+  const SAVE_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  let lastHierarchySavedAt = null;
+
+  function formatSavedAt(date) {
+    const h = date.getHours();
+    const displayHour = ((h + 11) % 12) + 1;
+    const ampm = h < 12 ? 'AM' : 'PM';
+    return SAVE_MONTH_NAMES[date.getMonth()] + ' ' + date.getDate() + ', ' +
+      displayHour + ':' + pad2(date.getMinutes(), 2) + ' ' + ampm;
+  }
+
+  function updateSaveStatusDisplay() {
+    if (!saveStatusEl) return;
+    if (lastHierarchySavedAt) {
+      saveStatusEl.textContent = 'Last saved ' + formatSavedAt(lastHierarchySavedAt);
+      saveStatusEl.classList.add('is-saved');
+    } else {
+      saveStatusEl.textContent = 'Not saved recently yet.';
+      saveStatusEl.classList.remove('is-saved');
+    }
+  }
+
+  function markHierarchySaved() {
+    lastHierarchySavedAt = new Date();
+    updateSaveStatusDisplay();
+  }
+
+  updateSaveStatusDisplay();
   function downloadTextBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -2846,6 +2992,7 @@
     if (state.schemeIds.length === 0) { hierarchyIoStatus.textContent = 'No categorization yet to export.'; return; }
     downloadTextBlob(new Blob([hierarchyToOutline()], { type: 'text/plain' }),
       'summit-categorization-' + draftTimestamp() + '.txt');
+    markHierarchySaved();
   });
 
   if (hierarchyCopyBtn) hierarchyCopyBtn.addEventListener('click', async () => {
@@ -2854,6 +3001,7 @@
       await navigator.clipboard.writeText(hierarchyToOutline());
       hierarchyIoStatus.textContent = 'Outline copied to clipboard.';
       showToast('Categorization outline copied.');
+      markHierarchySaved();
     } catch (err) {
       showToast('Could not copy \u2014 try Export .txt instead.');
     }
