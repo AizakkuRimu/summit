@@ -65,6 +65,15 @@
   user-select: none;
 }
 
+.peaks-generate-status {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--gray);
+  white-space: normal;
+  word-break: break-word;
+  max-width: 220px;
+}
+
 /* ---------- Grid scroll area ---------- */
 
 .peaks-scroll {
