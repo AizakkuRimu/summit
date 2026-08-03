@@ -471,6 +471,18 @@
                 <button type="button" class="summit-btn summit-btn--glyph" id="draft-add-scheme-btn" title="Add scheme" aria-label="Add scheme">+</button>
               </div>
             </div>
+            <div class="draft-tree-toolbar">
+              <div class="draft-tree-search">
+                <input type="text" class="draft-search-input draft-tree-search__input" id="draft-tree-search-input" placeholder="Search hierarchy…" aria-label="Search hierarchy" autocomplete="off">
+                <select class="draft-tree-search__level" id="draft-tree-search-level" aria-label="Hierarchy level to search">
+                  <option value="scheme">Scheme</option>
+                  <option value="category">Category</option>
+                  <option value="enquiry">Enquiry</option>
+                  <option value="subenquiry" selected>Sub-Enquiry</option>
+                </select>
+              </div>
+              <span class="draft-save-status" id="draft-save-status">Not saved recently yet.</span>
+            </div>
             <div class="draft-tree" id="draft-tree" role="tree" aria-label="Scheme, category, enquiry, sub-enquiry hierarchy">
               <p class="draft-empty-note" id="draft-tree-empty">No schemes yet — click + to add one.</p>
             </div>
