@@ -343,6 +343,15 @@
 
           <div class="summit-toolbar__divider"></div>
 
+          <div class="summit-toolbar__group" data-group="generate">
+            <button type="button" class="summit-btn summit-btn--primary" id="peaks-generate-btn" title="Build the reply template in column N from columns D–L on every row that has data">
+              Generate Template
+            </button>
+            <span class="peaks-generate-status" id="peaks-generate-status" aria-live="polite"></span>
+          </div>
+
+          <div class="summit-toolbar__divider"></div>
+
           <div class="summit-toolbar__group summit-batch-group" data-group="batch">
             <label class="summit-batch-group__label" for="peaks-batch-size">Batch export</label>
             <select id="peaks-batch-size" class="summit-select" aria-label="Rows per batch">
