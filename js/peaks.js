@@ -54,6 +54,22 @@
   const suggestList = document.getElementById('peaks-suggest-list');
   const suggestSourceEl = document.getElementById('peaks-suggest-source');
   const suggestDismissBtn = document.getElementById('peaks-suggest-dismiss');
+  const generateBtn = document.getElementById('peaks-generate-btn');
+  const generateStatusEl = document.getElementById('peaks-generate-status');
+
+  const toastEl = document.getElementById('summit-toast');
+  let toastTimer = null;
+  function showToast(message) {
+    if (!toastEl) return;
+    toastEl.textContent = message;
+    toastEl.hidden = false;
+    requestAnimationFrame(() => toastEl.classList.add('is-visible'));
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toastEl.classList.remove('is-visible');
+      setTimeout(() => { toastEl.hidden = true; }, 220);
+    }, 4000);
+  }
 
   let numRows = 0;
   let numCols = 0;
@@ -1819,6 +1835,147 @@
     redoStack = [];
     updateHistoryButtons();
   }
+
+  // ============================================================
+  // Generate Template — builds a CPF reply letter in column N from
+  // columns D-L on every row that has data, per Summit's spec:
+  //
+  //   D = registered email, E = case email, F = registered mobile,
+  //   H = enquiry date/ref, J/K = salutation (title/name), L = free
+  //   text that may say "Prisoner", N = output.
+  //
+  // Reply channel:      D or E present -> Email
+  //                      no D/E, F present -> Mailbox
+  //                      no D/E/F -> Hardcopy (Prisoner/Non-Prisoner per L)
+  // Additionally-liner:  no D, no E -> "no registered and no case email"
+  //                      E only -> "no registered email"
+  //                      D and E present but differ -> "email differs"
+  //                      D present (E absent, or D and E match) -> none
+  // End-liner: fixed text per channel (Hardcopy Non-Prisoner reuses Email's).
+  //
+  // "Prisoner" in L also swaps the referral line's wording, independent
+  // of channel. Only the first "Account settings" in the whole letter
+  // gets hyperlinked.
+  // ============================================================
+
+  const GEN_COL = { A: 0, B: 1, C: 2, D: 3, E: 4, F: 5, G: 6, H: 7, I: 8, J: 9, K: 10, L: 11, M: 12, N: 13 };
+  const ACCOUNT_SETTINGS_URL = 'http://www.cpf.gov.sg/member/ds/account-settings';
+
+  const LINER_NO_REG_NO_CASE =
+    'Additionally, we note that you have not registered your contact details with us. Please update your preferred email address and contact number with us at your Account settings (Singpass required) to receive timely notifications about your CPF account and account-specific responses in future.\n\n' +
+    'If you do not have an email address, you may like to know that you can create a Gmail, Yahoo mail, Outlook or Hotmail address for free.';
+  const LINER_NO_REG_EMAIL =
+    'Additionally, we note that you have not registered your email address with us. Where possible, please register your email address at Account settings using your Singpass to ensure you can receive account-specific responses and email notifications on your CPF account in future.';
+  const LINER_EMAIL_DIFFERS =
+    'Additionally, we note that your email address is different from the one maintained in our records. Please update your email address with us at your Account settings with your Singpass if you would like to receive notifications about your CPF account and account-specific responses to this email address.';
+
+  const ENDLINER_EMAIL = 'We would be pleased to help if you require further assistance. For more information on CPF, please visit cpf.gov.sg.';
+  const ENDLINER_MAILBOX = 'We would be pleased to help if you require further assistance. If you have further clarifications, you can Contact Us and provide your email address.';
+  const ENDLINER_HARDCOPY_NONPRISONER = ENDLINER_EMAIL;
+  const ENDLINER_HARDCOPY_PRISONER = 'We would be pleased to help if you require further assistance.\nThank you.';
+
+  function genCellText(r, colLetter) {
+    const c = GEN_COL[colLetter];
+    const td = cellsEl[r] && cellsEl[r][c];
+    return td ? td.textContent.trim() : '';
+  }
+
+  // "Non-Prisoner" contains the substring "Prisoner" too, so this only
+  // counts a bare "Prisoner" mention, not a "Non-Prisoner" one.
+  function isPrisonerFlag(lText) {
+    const low = lText.toLowerCase();
+    return low.includes('prisoner') && !low.includes('non-prisoner') && !low.includes('non prisoner');
+  }
+
+  // Returns the generated letter text for a row, or null if the row has
+  // nothing in D/E/F/H/J/K/L worth generating from.
+  function buildTemplateForRow(r) {
+    const d = genCellText(r, 'D');
+    const e = genCellText(r, 'E');
+    const f = genCellText(r, 'F');
+    const h = genCellText(r, 'H');
+    const j = genCellText(r, 'J');
+    const k = genCellText(r, 'K');
+    const l = genCellText(r, 'L');
+    if (!d && !e && !f && !h && !j && !k && !l) return null;
+
+    const hasD = !!d, hasE = !!e, hasF = !!f;
+    const prisoner = isPrisonerFlag(l);
+
+    let channel;
+    if (hasD || hasE) channel = 'email';
+    else if (hasF) channel = 'mailbox';
+    else channel = prisoner ? 'hardcopy-prisoner' : 'hardcopy-nonprisoner';
+
+    let liner = null;
+    if (!hasD && !hasE) liner = LINER_NO_REG_NO_CASE;
+    else if (!hasD && hasE) liner = LINER_NO_REG_EMAIL;
+    else if (hasD && hasE && d.toLowerCase() !== e.toLowerCase()) liner = LINER_EMAIL_DIFFERS;
+    // hasD with no E, or hasD/hasE matching: already fully registered, no liner.
+
+    const endLiner = channel === 'email' ? ENDLINER_EMAIL
+      : channel === 'mailbox' ? ENDLINER_MAILBOX
+      : channel === 'hardcopy-prisoner' ? ENDLINER_HARDCOPY_PRISONER
+      : ENDLINER_HARDCOPY_NONPRISONER;
+
+    const refLine = prisoner ? 'We refer to your letter request received on ' + h : 'We refer to your enquiry of ' + h;
+    const salutation = 'Dear ' + [j, k].filter(Boolean).join(' ');
+
+    const lines = [salutation, refLine];
+    if (liner) lines.push(liner);
+    lines.push(endLiner);
+    return lines.join('\n');
+  }
+
+  // Writes the letter into column N, hyperlinking only the first
+  // "Account settings" occurrence in the whole letter (whichever liner
+  // it happens to fall in).
+  function writeTemplateToCell(r, text) {
+    const td = cellsEl[r][GEN_COL.N];
+    td.textContent = '';
+    const marker = 'Account settings';
+    const idx = text.indexOf(marker);
+    if (idx === -1) {
+      td.appendChild(document.createTextNode(text));
+    } else {
+      td.appendChild(document.createTextNode(text.slice(0, idx)));
+      const a = makeLinkEl(ACCOUNT_SETTINGS_URL);
+      a.textContent = marker;
+      td.appendChild(a);
+      td.appendChild(document.createTextNode(text.slice(idx + marker.length)));
+    }
+    td.classList.add('peaks-cell--wrap');
+    if (rowHeights[r] <= DEFAULT_ROW_HEIGHT) {
+      rowHeights[r] = 96;
+      tbody.children[r].style.height = '96px';
+    }
+  }
+
+  function generateTemplates() {
+    const used = getUsedRange();
+    if (used.rows === 0) { showToast('Nothing to generate \u2014 the sheet looks empty.'); return; }
+    const rowsToWrite = [];
+    for (let r = 0; r < used.rows; r++) {
+      const text = buildTemplateForRow(r);
+      if (text !== null) rowsToWrite.push({ r, text });
+    }
+    if (rowsToWrite.length === 0) {
+      showToast('No rows with data in columns D\u2013L to generate from.');
+      return;
+    }
+    const coords = rowsToWrite.map(({ r }) => ({ r, c: GEN_COL.N }));
+    withHistory(coords, () => {
+      rowsToWrite.forEach(({ r, text }) => writeTemplateToCell(r, text));
+    });
+    const n = rowsToWrite.length;
+    if (generateStatusEl) generateStatusEl.textContent = 'Generated ' + n + ' template' + (n === 1 ? '' : 's') + ' into column N.';
+    showToast('Generated ' + n + ' reply template' + (n === 1 ? '' : 's') + '.');
+  }
+
+  if (generateBtn) generateBtn.addEventListener('click', () => {
+    if (editingCell) commitEdit();
+    generateTemplates();
+  });
 
   window.Summit = window.Summit || { state: { mountain: {}, peaks: {}, draft: {} } };
   window.Summit.peaks = {
