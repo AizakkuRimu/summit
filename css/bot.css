@@ -1,0 +1,328 @@
+/* ---------------------------------------------------------
+   Summit — bot.css
+   Sherpa: the bottom-right chat assistant.
+   Colour comes entirely from theme.css custom properties so
+   it follows light/dark mode automatically.
+--------------------------------------------------------- */
+
+.summit-bot__launcher {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 120;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  background: var(--bronze);
+  color: var(--stone-raised);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  transition: background-color 140ms ease, transform 140ms ease;
+}
+
+.summit-bot__launcher:hover {
+  background: var(--bronze-deep);
+  transform: translateY(-1px);
+}
+
+.summit-bot__launcher svg {
+  width: 24px;
+  height: 24px;
+}
+
+.summit-bot__dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--bronze-soft);
+  border: 2px solid var(--stone-raised);
+}
+
+.summit-bot__panel[hidden] {
+  display: none;
+}
+
+.summit-bot__panel {
+  position: fixed;
+  right: 20px;
+  bottom: 84px;
+  z-index: 120;
+  width: 336px;
+  max-width: calc(100vw - 32px);
+  height: 480px;
+  max-height: calc(100vh - 120px);
+  background: var(--stone-raised);
+  border: 1px solid var(--gray-line);
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.24);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.summit-bot__header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--gray-line);
+  background: var(--stone-raised);
+}
+
+.summit-bot__header-mark {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.summit-bot__header-mark .summit-mark__outer { fill: var(--bronze); }
+.summit-bot__header-mark .summit-mark__inner { fill: var(--stone-raised); }
+
+.summit-bot__header-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.summit-bot__header-name {
+  font-family: 'Fraunces', serif;
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--ink);
+  line-height: 1.2;
+}
+
+.summit-bot__header-status {
+  font-size: 11px;
+  color: var(--gray);
+  line-height: 1.3;
+}
+
+.summit-bot__header-status::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #6E9C5A;
+  margin-right: 5px;
+}
+
+.summit-bot__close {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  color: var(--gray);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.summit-bot__close:hover {
+  background: var(--bronze-soft);
+  color: var(--ink);
+}
+
+.summit-bot__close svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.summit-bot__messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.summit-bot__msg {
+  max-width: 88%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.summit-bot__msg--bot {
+  align-self: flex-start;
+  background: var(--stone);
+  color: var(--ink);
+  border: 1px solid var(--gray-line);
+  border-bottom-left-radius: 3px;
+}
+
+.summit-bot__msg--user {
+  align-self: flex-end;
+  background: var(--bronze-soft);
+  color: var(--ink);
+  border-bottom-right-radius: 3px;
+}
+
+/* The /duplicate picker rides inside its own full-width bot bubble so
+   the search box and list have room — never clipped by the 88% cap
+   the plain text bubbles use, and never wider than the panel itself. */
+.summit-bot__msg--picker {
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+}
+
+.summit-bot__picker-intro {
+  font-size: 13px;
+  margin: 0 0 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.summit-bot__picker-search {
+  width: 100%;
+  box-sizing: border-box;
+  height: 30px;
+  border-radius: 6px;
+  border: 1px solid var(--gray-line);
+  background: var(--stone-raised);
+  color: var(--ink);
+  padding: 0 8px;
+  font-family: inherit;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.summit-bot__picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0 0;
+  border-top: 1px solid var(--gray-line);
+  max-height: 190px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.summit-bot__picker-item {
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 8px;
+  display: block;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.summit-bot__picker-item:hover,
+.summit-bot__picker-item:focus-visible {
+  background: var(--bronze-soft);
+}
+
+.summit-bot__picker-item-name {
+  display: block;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.summit-bot__picker-item-path {
+  display: block;
+  font-size: 11px;
+  color: var(--gray);
+  margin-top: 1px;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.summit-bot__picker-empty {
+  font-size: 12px;
+  color: var(--gray);
+  padding: 4px 2px 2px;
+}
+
+.summit-bot__inputrow {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  padding: 10px;
+  border-top: 1px solid var(--gray-line);
+}
+
+.summit-bot__input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--gray-line);
+  background: var(--stone);
+  color: var(--ink);
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.summit-bot__send {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: none;
+  background: var(--bronze);
+  color: var(--stone-raised);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.summit-bot__send:hover {
+  background: var(--bronze-deep);
+}
+
+.summit-bot__send svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (max-width: 420px) {
+  .summit-bot__panel {
+    right: 16px;
+    left: 16px;
+    width: auto;
+    max-width: none;
+  }
+  .summit-bot__launcher {
+    right: 16px;
+  }
+}
