@@ -2475,7 +2475,7 @@
   // ============================================================
   // Split by Date (a Peaks-only view, not an Excel feature)
   //
-  // Groups every row that has a date in column H into its own table —
+  // Groups every row that has a date in column I into its own table —
   // rows with nothing in H simply don't appear anywhere in this view.
   // Only columns G–N are shown/copied; A–F are omitted entirely here.
   // This is a read-only derived view: toggling it on swaps the editable
@@ -2505,7 +2505,7 @@
     const groups = new Map(); // groupKey -> { label, sortKey, order, rows: [] }
     let order = 0;
     for (let r = 0; r < used.rows; r++) {
-      const td = cellsEl[r][GEN_COL.H];
+      const td = cellsEl[r][GEN_COL.I];
       const text = td ? td.textContent.trim() : '';
       if (!text) continue;
       const sortKey = parseSplitDate(text);
@@ -2661,14 +2661,22 @@
   // style name, precisely so it survives Merge Formatting too.
   const CLIPBOARD_STYLE_BLOCK =
     '<style>' +
-    'h2.peaksHeading2{mso-style-name:"Heading 2";font-family:"Aptos Serif",serif;font-size:12.0pt;color:#0F4761;}' +
+    'h2.peaksHeading2{mso-style-name:"Heading 2";font-family:"Aptos Serif",serif;font-size:12.0pt;color:#0F4761;font-weight:normal;}' +
     'p.peaksNoSpacing,li.peaksNoSpacing,div.peaksNoSpacing' +
     '{mso-style-name:"No Spacing";mso-style-unhide:no;mso-style-priority:1;mso-style-qformat:yes;' +
     'mso-style-parent:"";margin:0in;margin-bottom:.0001pt;mso-pagination:widow-orphan;' +
     'font-size:10.0pt;font-family:"Aptos Serif",serif;color:black;}' +
+    // Word treats a pasted <a href> as a real hyperlink field and colours
+    // its display text from its own built-in "Hyperlink" character style
+    // — not from whatever inline colour the <a> carries — so a direct
+    // style on the tag alone isn't enough. Redefining that named style
+    // here (the same way Heading 2 / No Spacing are redefined above) is
+    // what actually changes the colour Word renders the link in.
+    'a:link,span.MsoHyperlink{mso-style-name:"Hyperlink";color:#0F4761;text-decoration:underline;}' +
+    'a:visited,span.MsoHyperlinkFollowed{mso-style-name:"FollowedHyperlink";color:#0F4761;text-decoration:underline;}' +
     '</style>';
 
-  const CLIPBOARD_HEADING_RUN_STYLE = 'font-family:"Aptos Serif",serif;font-size:12.0pt;color:#0F4761;';
+  const CLIPBOARD_HEADING_RUN_STYLE = 'font-family:"Aptos Serif",serif;font-size:12.0pt;color:#0F4761;font-weight:normal;';
   const CLIPBOARD_BODY_RUN_STYLE = 'font-family:"Aptos Serif",serif;font-size:10.0pt;color:black;font-weight:normal;font-style:normal;text-decoration:none;';
   const CLIPBOARD_LINK_RUN_STYLE = 'font-family:"Aptos Serif",serif;font-size:10.0pt;color:#0F4761;font-weight:normal;font-style:normal;text-decoration:underline;';
 
@@ -2779,7 +2787,7 @@
     if (groups.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'peaks-split__empty';
-      empty.textContent = 'No rows have a date in column H yet \u2014 uncheck this, fill in column H, then check it again.';
+      empty.textContent = 'No rows have a date in column I yet \u2014 uncheck this, fill in column I, then check it again.';
       splitView.appendChild(empty);
       return;
     }
