@@ -131,6 +131,7 @@
       th.className = 'peaks-colhead';
       th.scope = 'col';
       th.dataset.col = c;
+      th.style.width = DEFAULT_COL_WIDTH + 'px';
       const label = document.createElement('span');
       label.className = 'peaks-colhead__label';
       label.textContent = colLabel(c);
@@ -531,6 +532,7 @@
     const c = +th.dataset.col;
     colWidths[c] = DEFAULT_COL_WIDTH;
     colgroup.children[c + 1].style.width = DEFAULT_COL_WIDTH + 'px';
+    colHeaderEls[c].style.width = DEFAULT_COL_WIDTH + 'px';
     e.preventDefault();
   });
 
@@ -549,6 +551,7 @@
       const w = Math.max(MIN_COL_WIDTH, colResize.startWidth + dx);
       colWidths[colResize.c] = w;
       colgroup.children[colResize.c + 1].style.width = w + 'px';
+      colHeaderEls[colResize.c].style.width = w + 'px';
     } else if (rowResize) {
       const dy = e.clientY - rowResize.startY;
       const h = Math.max(MIN_ROW_HEIGHT, rowResize.startHeight + dy);
