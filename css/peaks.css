@@ -65,13 +65,32 @@
   user-select: none;
 }
 
+.summit-toolbar__group[data-group="generate"] {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 10px;
+}
+
 .peaks-generate-status {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 11px;
+  line-height: 1.4;
   color: var(--gray);
-  white-space: normal;
-  word-break: break-word;
-  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+  padding-left: 10px;
+  margin-left: 2px;
+  border-left: 1px solid var(--gray-line);
+  align-self: center;
+}
+
+.peaks-generate-status:empty {
+  padding-left: 0;
+  margin-left: 0;
+  border-left: none;
 }
 
 /* ---------- Grid scroll area ---------- */
@@ -365,6 +384,67 @@ td.peaks-cell--merge-master {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* ---------- Cut: fill-the-gap chooser ---------- */
+
+.peaks-cut-gap-menu {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--stone-raised);
+  color: var(--ink);
+  font-family: 'Inter', sans-serif;
+  font-size: 12.5px;
+  padding: 8px 10px;
+  border: 1px solid var(--gray-line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.12);
+  animation: peaks-paste-hint-in 0.12s ease-out;
+}
+
+.peaks-cut-gap-menu[hidden] {
+  display: none;
+}
+
+.peaks-cut-gap-menu__label {
+  font-weight: 500;
+  color: var(--gray);
+  white-space: nowrap;
+  margin-right: 2px;
+}
+
+.peaks-cut-gap-menu__btn {
+  font-family: 'Inter', sans-serif;
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--bronze-deep, #7a4a24);
+  background: var(--bronze-soft);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.peaks-cut-gap-menu__btn:hover,
+.peaks-cut-gap-menu__btn:focus-visible {
+  border-color: var(--bronze-deep, #7a4a24);
+}
+
+.peaks-cut-gap-menu__btn--muted {
+  color: var(--gray);
+  background: transparent;
+}
+
+.peaks-cut-gap-menu__btn--muted:hover,
+.peaks-cut-gap-menu__btn--muted:focus-visible {
+  color: var(--ink);
+  border-color: var(--gray-line);
+}
+
 /* ---------- Section 9: Smart Sub-Enquiry suggestions ---------- */
 
 .peaks-suggest {
@@ -579,6 +659,10 @@ a.peaks-link--internal {
   vertical-align: top;
   white-space: pre-line;
   word-break: break-word;
+}
+
+.peaks-split__col--nowrap {
+  white-space: nowrap !important;
 }
 
 .peaks-split__table th {
