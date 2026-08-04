@@ -352,6 +352,15 @@
 
           <div class="summit-toolbar__divider"></div>
 
+          <div class="summit-toolbar__group" data-group="split">
+            <label class="peaks-split-toggle" title="Group rows into their own tables by the date in column H, ready to copy into Word">
+              <input type="checkbox" id="peaks-split-toggle">
+              Split by Date (Col H)
+            </label>
+          </div>
+
+          <div class="summit-toolbar__divider"></div>
+
           <div class="summit-toolbar__group summit-batch-group" data-group="batch">
             <label class="summit-batch-group__label" for="peaks-batch-size">Batch export</label>
             <select id="peaks-batch-size" class="summit-select" aria-label="Rows per batch">
@@ -386,6 +395,8 @@
             <tbody id="peaks-body"></tbody>
           </table>
         </div>
+
+        <div class="peaks-split" id="peaks-split-view" hidden></div>
 
         <div class="peaks-ctxmenu" id="peaks-ctxmenu" role="menu" hidden>
           <button type="button" class="peaks-ctxmenu__item" data-ctx-action="copy-text" role="menuitem">
