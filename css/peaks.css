@@ -237,7 +237,12 @@ td.peaks-cell--editing {
 }
 
 td.peaks-cell--wrap:not(.peaks-cell--editing) {
-  white-space: normal;
+  /* pre-line (not normal) so an explicit line break in the text still
+     shows up visually even when the cell isn't in edit mode — "normal"
+     collapses \n exactly like any other whitespace, which was hiding
+     manual line breaks in generated/pasted content until you double-
+     clicked into the cell. */
+  white-space: pre-line;
   word-break: break-word;
   text-overflow: clip;
 }
@@ -469,4 +474,117 @@ td.peaks-cell--merge-master {
 
 a.peaks-link--internal {
   text-decoration-style: dashed;
+}
+
+/* ---------- Split by Date (Section 3.x) ----------
+   A read-only, Word-ready view: rows are grouped by column H's date into
+   their own little tables, each with a heading and a "Copy" button that
+   copies that one group (heading + table) so it pastes into Word as a
+   Heading 2 followed by a table. Toggled from the toolbar checkbox;
+   swaps places with the normal editable grid rather than living inside
+   it, since it's a derived view, not a second copy of the data. */
+
+.peaks-split-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+}
+
+.peaks-split-toggle:hover {
+  background: var(--bronze-soft);
+}
+
+.peaks-split-toggle input {
+  cursor: pointer;
+}
+
+.peaks-split {
+  flex: 1 1 auto;
+  overflow: auto;
+  background: var(--stone);
+  padding: 20px 24px 40px;
+}
+
+.peaks-split__empty {
+  color: var(--gray);
+  font-size: 13px;
+  padding: 12px 2px;
+}
+
+.peaks-split__topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--gray-line);
+}
+
+.peaks-split__topbar-label {
+  font-size: 12px;
+  color: var(--gray);
+}
+
+.peaks-split__group {
+  margin-bottom: 32px;
+}
+
+.peaks-split__group:last-child {
+  margin-bottom: 0;
+}
+
+.peaks-split__headerbar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.peaks-split__heading {
+  font-family: 'Inter', sans-serif;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0;
+}
+
+.peaks-split__copy {
+  flex: 0 0 auto;
+  font-size: 12px;
+  padding: 5px 12px;
+}
+
+.peaks-split__table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--stone-raised);
+  font-family: 'Inter', sans-serif;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.peaks-split__table th,
+.peaks-split__table td {
+  border: 1px solid var(--gray-line);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-line;
+  word-break: break-word;
+}
+
+.peaks-split__table th {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--gray);
+  background: var(--stone);
 }
