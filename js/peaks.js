@@ -2649,24 +2649,31 @@
     group.colWidths = widths;
   }
 
-  // Word decides each pasted block's paragraph style (Heading 2, No
-  // Spacing, ...) from the mso-style-name it can find for that block,
-  // falling back to whatever style was last named if a block doesn't
-  // carry one of its own. A bare <h2> followed by a <table> whose cells
-  // are plain text (no <p> wrapper) leaves the table with nothing of its
-  // own to name, so it inherits the heading's "Heading 2" instead. Naming
-  // every block explicitly closes that gap: the h2 as Heading 2, and
-  // every body cell's content wrapped in its own <p> named "No Spacing"
-  // — plus explicit font-family/size/colour inline, in case the target
-  // document doesn't have a "No Spacing" style defined at all, so the
-  // text still comes in as 10pt Aptos Serif, black, either way.
+  // Word only recognises an mso-style-name when it's declared in a
+  // <style> block against a CSS class (the way Word's own "Save as
+  // Filtered HTML" output does it) and applied to the element via
+  // class="...". An inline style="mso-style-name:..." attribute on the
+  // element itself is silently ignored — which is why the table text was
+  // still coming in as Heading 2 even after naming it "No Spacing" that
+  // way. Using real classes tied to a <style> block, as below, is what
+  // Word's importer actually reads. The inline font-family/size/colour on
+  // each <p> is a visual-only fallback for target documents that don't
+  // have a "No Spacing" style defined at all.
+  const CLIPBOARD_STYLE_BLOCK =
+    '<style>' +
+    'h2.peaksHeading2{mso-style-name:"Heading 2";}' +
+    'p.peaksNoSpacing,li.peaksNoSpacing,div.peaksNoSpacing' +
+    '{mso-style-name:"No Spacing";mso-style-unhide:no;mso-style-qformat:yes;' +
+    'mso-style-parent:"";margin:0in;font-size:10.0pt;font-family:"Aptos Serif",serif;color:black;}' +
+    '</style>';
+
   const CLIPBOARD_CELL_FONT_STYLE =
-    'font-family:"Aptos Serif";font-size:10pt;color:#000000;font-weight:normal;margin:0;';
+    'margin:0;font-family:"Aptos Serif";font-size:10pt;color:#000000;font-weight:normal;';
 
   function buildGroupClipboardHTML(group) {
     const cols = SPLIT_COL_LETTERS.map((k) => GEN_COL[k]);
-    let html = '<h2 style="mso-style-name:&quot;Heading 2&quot;">' + escapeHtml(formatLongDate(group.label)) + '</h2>';
-    const tableStyle = 'mso-style-name:&quot;Table Normal&quot;;border-collapse:collapse;' + (group.colWidths ? ' table-layout:fixed;' : '');
+    let html = '<h2 class="peaksHeading2">' + escapeHtml(formatLongDate(group.label)) + '</h2>';
+    const tableStyle = 'border-collapse:collapse;' + (group.colWidths ? ' table-layout:fixed;' : '');
     html += '<table border="1" cellspacing="0" cellpadding="4" style="' + tableStyle + '">';
     if (group.colWidths) {
       html += '<colgroup>' + SPLIT_COL_LETTERS.map((letter) => '<col style="width:' + group.colWidths[letter] + 'px">').join('') + '</colgroup>';
@@ -2676,7 +2683,7 @@
       html += '<tr>' + cols.map((c) => {
         const td = cellsEl[r][c];
         const inner = td ? cellInnerHTMLForClipboard(td) : '';
-        return '<td><p style="mso-style-name:&quot;No Spacing&quot;;' + CLIPBOARD_CELL_FONT_STYLE + '">' + inner + '</p></td>';
+        return '<td><p class="peaksNoSpacing" style="' + CLIPBOARD_CELL_FONT_STYLE + '">' + inner + '</p></td>';
       }).join('') + '</tr>';
     });
     html += '</tbody></table>';
@@ -2684,13 +2691,13 @@
   }
 
   // Wraps a body fragment (one or more h2+table groups) as a full HTML
-  // document. Word's HTML importer is more reliable at respecting the
-  // per-block mso-style-name hints above when they arrive inside a real
-  // <html><head>...<body> document rather than a bare fragment.
+  // document, including the class definitions above in <head> — Word's
+  // HTML importer needs those class rules present in the same document
+  // it's parsing, not just referenced by name.
   function wordClipboardDocument(bodyHtml) {
     return '<!DOCTYPE html><html xmlns:o="urn:schemas-microsoft-com:office:office" '
       + 'xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">'
-      + '<head><meta charset="utf-8"></head><body>' + bodyHtml + '</body></html>';
+      + '<head><meta charset="utf-8">' + CLIPBOARD_STYLE_BLOCK + '</head><body>' + bodyHtml + '</body></html>';
   }
 
   function buildGroupClipboardText(group) {
