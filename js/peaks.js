@@ -2649,30 +2649,34 @@
     group.colWidths = widths;
   }
 
-  // Word decides each pasted block's paragraph style (Heading 2, Normal,
-  // ...) from the mso-style-name it can find for that block, falling back
-  // to whatever style was last named if a block doesn't carry one of its
-  // own. A bare <h2> followed by a <table> whose cells are plain text (no
-  // <p> wrapper) leaves the table with nothing of its own to name, so it
-  // inherits the heading's "Heading 2" instead of "Normal". Naming every
-  // block explicitly — the h2 as Heading 2, and every header/body cell's
-  // content wrapped in its own Normal-named <p> — closes that gap.
+  // Word decides each pasted block's paragraph style (Heading 2, No
+  // Spacing, ...) from the mso-style-name it can find for that block,
+  // falling back to whatever style was last named if a block doesn't
+  // carry one of its own. A bare <h2> followed by a <table> whose cells
+  // are plain text (no <p> wrapper) leaves the table with nothing of its
+  // own to name, so it inherits the heading's "Heading 2" instead. Naming
+  // every block explicitly closes that gap: the h2 as Heading 2, and
+  // every body cell's content wrapped in its own <p> named "No Spacing"
+  // — plus explicit font-family/size/colour inline, in case the target
+  // document doesn't have a "No Spacing" style defined at all, so the
+  // text still comes in as 10pt Aptos Serif, black, either way.
+  const CLIPBOARD_CELL_FONT_STYLE =
+    'font-family:"Aptos Serif";font-size:10pt;color:#000000;font-weight:normal;margin:0;';
+
   function buildGroupClipboardHTML(group) {
     const cols = SPLIT_COL_LETTERS.map((k) => GEN_COL[k]);
-    let html = '<h2 style="mso-style-name:&quot;Heading 2&quot;">' + escapeHtml(group.label) + '</h2>';
+    let html = '<h2 style="mso-style-name:&quot;Heading 2&quot;">' + escapeHtml(formatLongDate(group.label)) + '</h2>';
     const tableStyle = 'mso-style-name:&quot;Table Normal&quot;;border-collapse:collapse;' + (group.colWidths ? ' table-layout:fixed;' : '');
     html += '<table border="1" cellspacing="0" cellpadding="4" style="' + tableStyle + '">';
     if (group.colWidths) {
       html += '<colgroup>' + SPLIT_COL_LETTERS.map((letter) => '<col style="width:' + group.colWidths[letter] + 'px">').join('') + '</colgroup>';
     }
-    html += '<thead><tr>' + cols.map((c) =>
-      '<th><p style="mso-style-name:&quot;Normal&quot;;margin:0;font-weight:bold;">' + escapeHtml(colLabel(c)) + '</p></th>'
-    ).join('') + '</tr></thead><tbody>';
+    html += '<tbody>';
     group.rows.forEach((r) => {
       html += '<tr>' + cols.map((c) => {
         const td = cellsEl[r][c];
         const inner = td ? cellInnerHTMLForClipboard(td) : '';
-        return '<td><p style="mso-style-name:&quot;Normal&quot;;margin:0;font-weight:normal;">' + inner + '</p></td>';
+        return '<td><p style="mso-style-name:&quot;No Spacing&quot;;' + CLIPBOARD_CELL_FONT_STYLE + '">' + inner + '</p></td>';
       }).join('') + '</tr>';
     });
     html += '</tbody></table>';
@@ -2691,12 +2695,13 @@
 
   function buildGroupClipboardText(group) {
     const cols = SPLIT_COL_LETTERS.map((k) => GEN_COL[k]);
-    const lines = [group.label, cols.map((c) => colLabel(c)).join('\t')];
+    const lines = [formatLongDate(group.label)];
     group.rows.forEach((r) => {
       lines.push(cols.map((c) => (cellsEl[r][c] ? cellsEl[r][c].textContent : '')).join('\t'));
     });
     return lines.join('\n');
   }
+
 
   // Copies pre-built HTML (with real hyperlinks/line breaks) to the
   // clipboard as both text/html and text/plain, since neither of the
@@ -2779,7 +2784,7 @@
       headerBar.className = 'peaks-split__headerbar';
       const heading = document.createElement('h2');
       heading.className = 'peaks-split__heading';
-      heading.textContent = group.label;
+      heading.textContent = formatLongDate(group.label);
       headerBar.appendChild(heading);
 
       const copyBtn = document.createElement('button');
@@ -2792,7 +2797,7 @@
         const text = buildGroupClipboardText(group);
         const ok = await copyRichHTML(html, text);
         const n = group.rows.length;
-        showToast(ok ? ('Copied ' + group.label + ' (' + n + ' row' + (n === 1 ? '' : 's') + ').') : 'Copy failed \u2014 try again.');
+        showToast(ok ? ('Copied ' + formatLongDate(group.label) + ' (' + n + ' row' + (n === 1 ? '' : 's') + ').') : 'Copy failed \u2014 try again.');
       });
       headerBar.appendChild(copyBtn);
       section.appendChild(headerBar);
