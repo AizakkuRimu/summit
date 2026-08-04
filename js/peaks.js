@@ -118,20 +118,46 @@
     cellsEl[r][c] = td;
   }
 
+  // A sticky <th> (position: sticky; top: 0) only reliably keeps a column's
+  // width if the width is set on the <th> itself. Relying solely on the
+  // <colgroup><col> width — which is all addColumns/resizing used to do —
+  // works fine for the body cells (table-layout: fixed honours it there
+  // because they aren't sticky) but sticky header cells can re-layout to
+  // fit their content (the bare column letter) as they repaint while
+  // scrolling past, which is exactly the "shrinking column lines" bug.
+  // Row headers never had this problem because row height is already set
+  // directly on the <tr> itself. Routing every width change through this
+  // one function keeps <col> and <th> in sync, the same way rows already
+  // work.
+  function setColWidth(c, w) {
+    colWidths[c] = w;
+    const col = colgroup.children[c + 1];
+    if (col) col.style.width = w + 'px';
+    const th = colHeaderEls[c];
+    if (th) {
+      th.style.width = w + 'px';
+      th.style.minWidth = w + 'px';
+      th.style.maxWidth = w + 'px';
+    }
+  }
+
+  function setRowHeight(r, h) {
+    rowHeights[r] = h;
+    const tr = tbody.children[r];
+    if (tr) tr.style.height = h + 'px';
+  }
+
   function addColumns(count) {
     for (let i = 0; i < count; i++) {
       const c = numCols;
-      colWidths[c] = DEFAULT_COL_WIDTH;
 
       const col = document.createElement('col');
-      col.style.width = DEFAULT_COL_WIDTH + 'px';
       colgroup.appendChild(col);
 
       const th = document.createElement('th');
       th.className = 'peaks-colhead';
       th.scope = 'col';
       th.dataset.col = c;
-      th.style.width = DEFAULT_COL_WIDTH + 'px';
       const label = document.createElement('span');
       label.className = 'peaks-colhead__label';
       label.textContent = colLabel(c);
@@ -141,6 +167,7 @@
       th.appendChild(handle);
       headerRow.appendChild(th);
       colHeaderEls[c] = th;
+      setColWidth(c, DEFAULT_COL_WIDTH);
 
       for (let r = 0; r < numRows; r++) addCellToRow(r, c);
       numCols++;
@@ -150,11 +177,9 @@
   function addRows(count) {
     for (let i = 0; i < count; i++) {
       const r = numRows;
-      rowHeights[r] = DEFAULT_ROW_HEIGHT;
       cellsEl[r] = [];
 
       const tr = document.createElement('tr');
-      tr.style.height = DEFAULT_ROW_HEIGHT + 'px';
 
       const th = document.createElement('th');
       th.className = 'peaks-rowhead';
@@ -168,6 +193,7 @@
 
       tbody.appendChild(tr);
       rowHeaderEls[r] = th;
+      setRowHeight(r, DEFAULT_ROW_HEIGHT);
 
       for (let c = 0; c < numCols; c++) addCellToRow(r, c);
       numRows++;
@@ -514,6 +540,84 @@
   // Column / row resizing (Section 3.2)
   // ============================================================
 
+  // ---- Content measuring, for real "fit to content" autofit (Excel-style
+  //      double-click), independent of any current word-wrap setting. ----
+
+  let measureCanvasCtx = null;
+  function getTextWidth(text) {
+    if (!measureCanvasCtx) {
+      measureCanvasCtx = document.createElement('canvas').getContext('2d');
+    }
+    // Match td.peaks-cell's font exactly, reading it from a live cell so
+    // this stays correct even if the stylesheet changes later.
+    const sample = (cellsEl[0] && cellsEl[0][0]) || tbody.querySelector('td.peaks-cell');
+    if (sample) {
+      const s = getComputedStyle(sample);
+      measureCanvasCtx.font = `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`;
+    }
+    return measureCanvasCtx.measureText(text).width;
+  }
+
+  let measureDiv = null;
+  function getWrappedHeight(text, width) {
+    if (!measureDiv) {
+      measureDiv = document.createElement('div');
+      measureDiv.style.position = 'absolute';
+      measureDiv.style.visibility = 'hidden';
+      measureDiv.style.left = '-9999px';
+      measureDiv.style.top = '0';
+      measureDiv.style.boxSizing = 'border-box';
+      measureDiv.style.padding = '0 6px';
+      measureDiv.style.whiteSpace = 'normal';
+      measureDiv.style.wordBreak = 'break-word';
+      document.body.appendChild(measureDiv);
+    }
+    const sample = (cellsEl[0] && cellsEl[0][0]) || tbody.querySelector('td.peaks-cell');
+    if (sample) {
+      const s = getComputedStyle(sample);
+      measureDiv.style.fontFamily = s.fontFamily;
+      measureDiv.style.fontSize = s.fontSize;
+      measureDiv.style.fontWeight = s.fontWeight;
+      measureDiv.style.lineHeight = s.lineHeight;
+    }
+    measureDiv.style.width = width + 'px';
+    measureDiv.textContent = text;
+    return measureDiv.offsetHeight;
+  }
+
+  const CELL_H_PADDING = 12; // td.peaks-cell padding: 0 6px, left + right
+  const AUTOFIT_COL_BUFFER = 6;
+
+  // Sets column c to the narrowest width that fits its longest single line
+  // of content across every row currently in the grid (mirrors Excel's
+  // double-click-the-column-line behaviour).
+  function autoFitColumn(c) {
+    let maxWidth = 0;
+    for (let r = 0; r < numRows; r++) {
+      const td = cellsEl[r][c];
+      if (!td || !td.textContent) continue;
+      const w = getTextWidth(td.textContent);
+      if (w > maxWidth) maxWidth = w;
+    }
+    const target = Math.ceil(maxWidth + CELL_H_PADDING + AUTOFIT_COL_BUFFER);
+    setColWidth(c, Math.max(MIN_COL_WIDTH, target));
+  }
+
+  // Sets row r to the shortest height that fits its tallest cell, taking
+  // each cell's own column width and wrap state into account.
+  function autoFitRow(r) {
+    let maxHeight = DEFAULT_ROW_HEIGHT;
+    for (let c = 0; c < numCols; c++) {
+      const td = cellsEl[r][c];
+      if (!td || !td.textContent) continue;
+      if (td.classList.contains('peaks-cell--wrap')) {
+        const h = getWrappedHeight(td.textContent, colWidths[c]);
+        if (h > maxHeight) maxHeight = h;
+      }
+    }
+    setRowHeight(r, Math.max(MIN_ROW_HEIGHT, Math.ceil(maxHeight)));
+  }
+
   headerRow.addEventListener('mousedown', (e) => {
     if (!e.target.classList.contains('peaks-colhead__resize')) return;
     const th = e.target.parentElement;
@@ -524,15 +628,13 @@
     e.preventDefault();
   });
 
-  // Double-clicking a column's resize line auto-fits just that column
-  // to a width that comfortably wraps ~5 average words per line.
+  // Double-clicking a column's resize line auto-fits just that column to
+  // its own longest content — other columns are never touched.
   headerRow.addEventListener('dblclick', (e) => {
     if (!e.target.classList.contains('peaks-colhead__resize')) return;
     const th = e.target.parentElement;
     const c = +th.dataset.col;
-    colWidths[c] = DEFAULT_COL_WIDTH;
-    colgroup.children[c + 1].style.width = DEFAULT_COL_WIDTH + 'px';
-    colHeaderEls[c].style.width = DEFAULT_COL_WIDTH + 'px';
+    autoFitColumn(c);
     e.preventDefault();
   });
 
@@ -545,18 +647,25 @@
     e.preventDefault();
   });
 
+  // Double-clicking a row's resize line auto-fits just that row to its own
+  // tallest cell — other rows are never touched.
+  tbody.addEventListener('dblclick', (e) => {
+    if (!e.target.classList.contains('peaks-rowhead__resize')) return;
+    const th = e.target.parentElement;
+    const r = +th.dataset.row;
+    autoFitRow(r);
+    e.preventDefault();
+  });
+
   document.addEventListener('mousemove', (e) => {
     if (colResize) {
       const dx = e.clientX - colResize.startX;
       const w = Math.max(MIN_COL_WIDTH, colResize.startWidth + dx);
-      colWidths[colResize.c] = w;
-      colgroup.children[colResize.c + 1].style.width = w + 'px';
-      colHeaderEls[colResize.c].style.width = w + 'px';
+      setColWidth(colResize.c, w);
     } else if (rowResize) {
       const dy = e.clientY - rowResize.startY;
       const h = Math.max(MIN_ROW_HEIGHT, rowResize.startHeight + dy);
-      rowHeights[rowResize.r] = h;
-      tbody.children[rowResize.r].style.height = h + 'px';
+      setRowHeight(rowResize.r, h);
     }
   });
 
@@ -1228,8 +1337,7 @@
       forEachSelectedCell((td, r) => {
         td.classList.toggle('peaks-cell--wrap', turnOn);
         if (turnOn && rowHeights[r] <= DEFAULT_ROW_HEIGHT) {
-          rowHeights[r] = WRAP_ROW_HEIGHT;
-          tbody.children[r].style.height = WRAP_ROW_HEIGHT + 'px';
+          setRowHeight(r, WRAP_ROW_HEIGHT);
         }
       });
     });
@@ -1963,8 +2071,7 @@
     }
     td.classList.add('peaks-cell--wrap');
     if (rowHeights[r] <= DEFAULT_ROW_HEIGHT) {
-      rowHeights[r] = WRAP_ROW_HEIGHT;
-      tbody.children[r].style.height = WRAP_ROW_HEIGHT + 'px';
+      setRowHeight(r, WRAP_ROW_HEIGHT);
     }
   }
 
