@@ -426,6 +426,13 @@
 
         <div class="peaks-paste-hint" id="peaks-paste-hint" hidden></div>
 
+        <div class="peaks-cut-gap-menu" id="peaks-cut-gap-menu" hidden role="menu" aria-label="Fill the gap left by cut cells">
+          <span class="peaks-cut-gap-menu__label">Cut — fill the gap:</span>
+          <button type="button" class="peaks-cut-gap-menu__btn" data-cut-gap="left" role="menuitem">Shift cells left</button>
+          <button type="button" class="peaks-cut-gap-menu__btn" data-cut-gap="up" role="menuitem">Shift cells up</button>
+          <button type="button" class="peaks-cut-gap-menu__btn peaks-cut-gap-menu__btn--muted" data-cut-gap="none" role="menuitem">Leave blank</button>
+        </div>
+
         <!-- Section 9 (future development, built early): Smart
              Sub-Enquiry suggestions, sourced from the cell to the left
              of the current selection via window.Summit.draft. -->
