@@ -57,6 +57,8 @@
   const suggestDismissBtn = document.getElementById('peaks-suggest-dismiss');
   const generateBtn = document.getElementById('peaks-generate-btn');
   const generateStatusEl = document.getElementById('peaks-generate-status');
+  const splitToggle = document.getElementById('peaks-split-toggle');
+  const splitView = document.getElementById('peaks-split-view');
 
   const toastEl = document.getElementById('summit-toast');
   let toastTimer = null;
@@ -757,11 +759,109 @@
     return rows.join('\n');
   }
 
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // Renders one cell's content as HTML, preserving <a href> links and
+  // explicit line breaks (as <br>) — the counterpart to cellRunsFromNode
+  // below, which reads this same shape back out on paste.
+  function cellInnerHTMLForClipboard(td) {
+    let html = '';
+    td.childNodes.forEach((node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        html += escapeHtml(node.textContent).replace(/\n/g, '<br>');
+      } else if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'A') {
+        html += '<a href="' + escapeHtml(node.getAttribute('href') || '') + '">' + escapeHtml(node.textContent) + '</a>';
+      } else {
+        html += escapeHtml(node.textContent || '');
+      }
+    });
+    return html;
+  }
+
+  // A second, HTML clipboard flavour alongside the plain-text TSV one —
+  // this is what lets a copy/paste round trip (within Peaks, or out to an
+  // app that reads HTML clipboard data) keep hyperlinks intact instead of
+  // flattening every cell down to its bare display text.
+  function selectionToHTML(sel) {
+    const rows = [];
+    for (let r = sel.r1; r <= sel.r2; r++) {
+      const cells = [];
+      for (let c = sel.c1; c <= sel.c2; c++) {
+        const td = cellsEl[r][c];
+        cells.push('<td>' + (td.classList.contains('peaks-cell--merge-slave') ? '' : cellInnerHTMLForClipboard(td)) + '</td>');
+      }
+      rows.push('<tr>' + cells.join('') + '</tr>');
+    }
+    return '<table><tbody>' + rows.join('') + '</tbody></table>';
+  }
+
   function parseClipboardText(text) {
     const rows = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
     // Drop one trailing empty row some apps append after the last real row.
     if (rows.length > 1 && rows[rows.length - 1] === '') rows.pop();
     return rows.map((row) => row.split('\t'));
+  }
+
+  // Pulls an ordered list of {text, href} runs out of a pasted <td>,
+  // turning <br>/<div>/<p> block breaks into literal "\n" text runs and
+  // <a href> elements into linked runs. This is the read-side counterpart
+  // to cellInnerHTMLForClipboard/selectionToHTML above.
+  function cellRunsFromNode(node) {
+    const runs = [];
+    function walk(n) {
+      if (n.nodeType === Node.TEXT_NODE) {
+        if (n.textContent) runs.push({ text: n.textContent, href: null });
+        return;
+      }
+      if (n.nodeType !== Node.ELEMENT_NODE) return;
+      const tag = n.tagName;
+      if (tag === 'A') {
+        const href = n.getAttribute('href') || '';
+        if (n.textContent) runs.push({ text: n.textContent, href });
+        return;
+      }
+      if (tag === 'BR') { runs.push({ text: '\n', href: null }); return; }
+      const blockLevel = tag === 'DIV' || tag === 'P';
+      n.childNodes.forEach(walk);
+      if (blockLevel && runs.length && runs[runs.length - 1].text !== '\n') runs.push({ text: '\n', href: null });
+    }
+    node.childNodes.forEach(walk);
+    while (runs.length && runs[runs.length - 1].text === '\n') runs.pop();
+    return runs;
+  }
+
+  // Parses an HTML clipboard payload's first <table> into a matrix of
+  // per-cell run arrays, or returns null if the payload has no table to
+  // read (e.g. HTML copied from a web page) so callers can fall back to
+  // the plain-text flavour.
+  function parseClipboardHTML(html) {
+    if (!html) return null;
+    const container = document.createElement('div');
+    container.innerHTML = html;
+    const table = container.querySelector('table');
+    if (!table) return null;
+    const matrix = [];
+    table.querySelectorAll('tr').forEach((tr) => {
+      const row = [];
+      tr.querySelectorAll('td,th').forEach((cell) => { row.push(cellRunsFromNode(cell)); });
+      if (row.length) matrix.push(row);
+    });
+    return matrix.length ? matrix : null;
+  }
+
+  function writeRunsToCell(td, runs) {
+    td.textContent = '';
+    runs.forEach((run) => {
+      if (run.href) {
+        const a = makeLinkEl(run.href);
+        a.textContent = run.text;
+        td.appendChild(a);
+      } else {
+        td.appendChild(document.createTextNode(run.text));
+      }
+    });
   }
 
   function ensureGridSize(minRows, minCols) {
@@ -777,6 +877,7 @@
     if (!selection) return;
     e.preventDefault();
     e.clipboardData.setData('text/plain', selectionToTSV(selection));
+    e.clipboardData.setData('text/html', selectionToHTML(selection));
     if (isCut) {
       withHistory(coordsForSelection(selection), () => {
         forEachSelectedCell((td) => { td.textContent = ''; });
@@ -842,7 +943,8 @@
     const mode = pendingPasteMode;
     disarmPasteMode();
 
-    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+    const cd = e.clipboardData || window.clipboardData;
+    const text = cd.getData('text/plain');
     if (!text) return;
 
     if (mode === 'raw') {
@@ -866,6 +968,29 @@
     }
 
     if (!selection) return;
+
+    // Prefer the HTML clipboard flavour (skipped for a vertical paste,
+    // which would need transposing runs too) so hyperlinks and explicit
+    // line breaks survive a copy/paste round trip instead of flattening
+    // down to their bare display text. Falls back to the plain-text path
+    // below when there's no HTML table to read (nothing copied from
+    // Peaks, or a source with no HTML clipboard flavour at all).
+    const richMatrix = mode !== 'vertical' ? parseClipboardHTML(cd.getData('text/html')) : null;
+
+    if (richMatrix) {
+      if (!mode && richMatrix.length === 1 && richMatrix[0].length === 1 &&
+          (selection.r1 !== selection.r2 || selection.c1 !== selection.c2)) {
+        // A single copied cell pasted onto a multi-cell selection fills
+        // the whole selection with it, same as Excel/Sheets.
+        const runs = richMatrix[0][0];
+        withHistory(coordsForSelection(selection), () => {
+          forEachSelectedCell((td) => { writeRunsToCell(td, runs); });
+        });
+        return;
+      }
+      pasteRichMatrix(selection.r1, selection.c1, richMatrix);
+      return;
+    }
 
     if (singleValue && !mode && (selection.r1 !== selection.r2 || selection.c1 !== selection.c2)) {
       // A single copied value pasted onto a multi-cell selection fills
@@ -980,6 +1105,27 @@
       out.push(row);
     }
     return out;
+  }
+
+  function pasteRichMatrix(startR, startC, matrix) {
+    const endR = startR + matrix.length - 1;
+    const endC = startC + Math.max(...matrix.map((row) => row.length)) - 1;
+    ensureGridSize(endR + 1, endC + 1);
+
+    const coords = [];
+    for (let i = 0; i < matrix.length; i++) {
+      for (let j = 0; j < matrix[i].length; j++) coords.push({ r: startR + i, c: startC + j });
+    }
+    withHistory(coords, () => {
+      for (let i = 0; i < matrix.length; i++) {
+        for (let j = 0; j < matrix[i].length; j++) {
+          const r = startR + i, c = startC + j;
+          if (r >= numRows || c >= numCols) continue;
+          writeRunsToCell(cellsEl[r][c], matrix[i][j] || []);
+        }
+      }
+    });
+    setSelection(startR, startC, endR, endC);
   }
 
   const URL_RE = /^(https?:\/\/|www\.)\S+$/i;
@@ -1985,6 +2131,17 @@
 
   const GEN_COL = { A: 0, B: 1, C: 2, D: 3, E: 4, F: 5, G: 6, H: 7, I: 8, J: 9, K: 10, L: 11, M: 12, N: 13 };
   const ACCOUNT_SETTINGS_URL = 'http://www.cpf.gov.sg/member/ds/account-settings';
+  const CONTACT_US_URL = 'https://cpf.gov.sg/membercontactus';
+  const CPF_HOMEPAGE_URL = 'https://www.cpf.gov.sg';
+
+  // Every marker below gets hyperlinked at most once per generated letter
+  // (its first occurrence, wherever that lands) — same rule the original
+  // "Account settings" link already followed, just generalised.
+  const AUTO_LINK_RULES = [
+    { marker: 'Account settings', url: ACCOUNT_SETTINGS_URL },
+    { marker: 'Contact Us', url: CONTACT_US_URL },
+    { marker: 'cpf.gov.sg', url: CPF_HOMEPAGE_URL }
+  ];
 
   const LINER_NO_REG_NO_CASE =
     'Additionally, we note that you have not registered your contact details with us. Please update your preferred email address and contact number with us at your Account settings (Singpass required) to receive timely notifications about your CPF account and account-specific responses in future.\n\n' +
@@ -2052,23 +2209,31 @@
     return lines.join('\n');
   }
 
-  // Writes the letter into column N, hyperlinking only the first
-  // "Account settings" occurrence in the whole letter (whichever liner
-  // it happens to fall in).
+  // Writes the letter into column N, hyperlinking the first occurrence of
+  // each marker in AUTO_LINK_RULES (Account settings / Contact Us /
+  // cpf.gov.sg), wherever in the letter it happens to fall.
   function writeTemplateToCell(r, text) {
     const td = cellsEl[r][GEN_COL.N];
     td.textContent = '';
-    const marker = 'Account settings';
-    const idx = text.indexOf(marker);
-    if (idx === -1) {
-      td.appendChild(document.createTextNode(text));
-    } else {
-      td.appendChild(document.createTextNode(text.slice(0, idx)));
-      const a = makeLinkEl(ACCOUNT_SETTINGS_URL);
-      a.textContent = marker;
+
+    const hits = [];
+    AUTO_LINK_RULES.forEach(({ marker, url }) => {
+      const idx = text.indexOf(marker);
+      if (idx !== -1) hits.push({ idx, end: idx + marker.length, marker, url });
+    });
+    hits.sort((a, b) => a.idx - b.idx);
+
+    let cursor = 0;
+    hits.forEach((hit) => {
+      if (hit.idx < cursor) return; // overlaps an already-linked span; skip it
+      if (hit.idx > cursor) td.appendChild(document.createTextNode(text.slice(cursor, hit.idx)));
+      const a = makeLinkEl(hit.url);
+      a.textContent = hit.marker;
       td.appendChild(a);
-      td.appendChild(document.createTextNode(text.slice(idx + marker.length)));
-    }
+      cursor = hit.end;
+    });
+    if (cursor < text.length) td.appendChild(document.createTextNode(text.slice(cursor)));
+
     td.classList.add('peaks-cell--wrap');
     if (rowHeights[r] <= DEFAULT_ROW_HEIGHT) {
       setRowHeight(r, WRAP_ROW_HEIGHT);
@@ -2100,6 +2265,220 @@
     if (editingCell) commitEdit();
     generateTemplates();
   });
+
+  // ============================================================
+  // Split by Date (a Peaks-only view, not an Excel feature)
+  //
+  // Groups every row that has a date in column H into its own table —
+  // rows with nothing in H simply don't appear anywhere in this view.
+  // Only columns G–N are shown/copied; A–F are omitted entirely here.
+  // This is a read-only derived view: toggling it on swaps the editable
+  // grid out for this rendering, toggling it off brings the grid back
+  // exactly as it was. Each group gets its own "Copy" button that copies
+  // just that date's heading + table, built so pasting into Word turns
+  // the heading into a real "Heading 2" paragraph followed by a table.
+  // ============================================================
+
+  const SPLIT_COL_LETTERS = ['G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'];
+
+  // Recognises d/m/yyyy (and d-m-yyyy, d.m.yyyy) so same-day entries
+  // written slightly differently (30/7/2026 vs 30/07/2026) still land in
+  // one group. Anything that doesn't parse still gets its own group,
+  // keyed on its literal text, and sorts after every real date.
+  function parseSplitDate(text) {
+    const m = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/.exec(text.trim());
+    if (!m) return null;
+    let d = +m[1], mo = +m[2], y = +m[3];
+    if (y < 100) y += 2000;
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    return y * 10000 + mo * 100 + d;
+  }
+
+  function buildDateGroups() {
+    const used = getUsedRange();
+    const groups = new Map(); // groupKey -> { label, sortKey, order, rows: [] }
+    let order = 0;
+    for (let r = 0; r < used.rows; r++) {
+      const td = cellsEl[r][GEN_COL.H];
+      const text = td ? td.textContent.trim() : '';
+      if (!text) continue;
+      const sortKey = parseSplitDate(text);
+      const groupKey = sortKey !== null ? 'd:' + sortKey : 't:' + text.toLowerCase();
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, { label: text, sortKey, order: order++, rows: [] });
+      }
+      groups.get(groupKey).rows.push(r);
+    }
+    return Array.from(groups.values()).sort((a, b) => {
+      if (a.sortKey !== null && b.sortKey !== null) return a.sortKey - b.sortKey;
+      if (a.sortKey !== null) return -1;
+      if (b.sortKey !== null) return 1;
+      return a.order - b.order;
+    });
+  }
+
+  function buildGroupClipboardHTML(group) {
+    const cols = SPLIT_COL_LETTERS.map((k) => GEN_COL[k]);
+    let html = '<h2>' + escapeHtml(group.label) + '</h2>';
+    html += '<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;">';
+    html += '<thead><tr>' + cols.map((c) => '<th>' + escapeHtml(colLabel(c)) + '</th>').join('') + '</tr></thead><tbody>';
+    group.rows.forEach((r) => {
+      html += '<tr>' + cols.map((c) => {
+        const td = cellsEl[r][c];
+        return '<td>' + (td ? cellInnerHTMLForClipboard(td) : '') + '</td>';
+      }).join('') + '</tr>';
+    });
+    html += '</tbody></table>';
+    return html;
+  }
+
+  function buildGroupClipboardText(group) {
+    const cols = SPLIT_COL_LETTERS.map((k) => GEN_COL[k]);
+    const lines = [group.label, cols.map((c) => colLabel(c)).join('\t')];
+    group.rows.forEach((r) => {
+      lines.push(cols.map((c) => (cellsEl[r][c] ? cellsEl[r][c].textContent : '')).join('\t'));
+    });
+    return lines.join('\n');
+  }
+
+  // Copies pre-built HTML (with real hyperlinks/line breaks) to the
+  // clipboard as both text/html and text/plain, since neither of the
+  // button clicks below fire a native 'copy' event to hand us
+  // e.clipboardData the way Ctrl+C does elsewhere in Peaks.
+  async function copyRichHTML(html, plainText) {
+    if (navigator.clipboard && window.ClipboardItem) {
+      try {
+        const item = new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([plainText], { type: 'text/plain' })
+        });
+        await navigator.clipboard.write([item]);
+        return true;
+      } catch (err) {
+        // Fall through to the legacy path below (older browsers, or a
+        // permission-less context that rejects the async Clipboard API).
+      }
+    }
+    const holder = document.createElement('div');
+    holder.setAttribute('contenteditable', 'true');
+    holder.style.position = 'fixed';
+    holder.style.left = '-9999px';
+    holder.style.top = '0';
+    holder.innerHTML = html;
+    document.body.appendChild(holder);
+    const range = document.createRange();
+    range.selectNodeContents(holder);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+    sel.removeAllRanges();
+    document.body.removeChild(holder);
+    return ok;
+  }
+
+  function renderSplitView() {
+    if (!splitView) return;
+    splitView.innerHTML = '';
+    const groups = buildDateGroups();
+
+    if (groups.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'peaks-split__empty';
+      empty.textContent = 'No rows have a date in column H yet \u2014 uncheck this, fill in column H, then check it again.';
+      splitView.appendChild(empty);
+      return;
+    }
+
+    if (groups.length > 1) {
+      const topbar = document.createElement('div');
+      topbar.className = 'peaks-split__topbar';
+      const label = document.createElement('span');
+      label.className = 'peaks-split__topbar-label';
+      label.textContent = groups.length + ' date groups';
+      topbar.appendChild(label);
+      const copyAllBtn = document.createElement('button');
+      copyAllBtn.type = 'button';
+      copyAllBtn.className = 'summit-btn';
+      copyAllBtn.textContent = 'Copy All Groups';
+      copyAllBtn.title = 'Copy every date group \u2014 each as its own Heading 2 + table \u2014 in one paste';
+      copyAllBtn.addEventListener('click', async () => {
+        const html = groups.map(buildGroupClipboardHTML).join('');
+        const text = groups.map(buildGroupClipboardText).join('\n\n');
+        const ok = await copyRichHTML(html, text);
+        showToast(ok ? ('Copied all ' + groups.length + ' date groups.') : 'Copy failed \u2014 try again.');
+      });
+      topbar.appendChild(copyAllBtn);
+      splitView.appendChild(topbar);
+    }
+
+    const cols = SPLIT_COL_LETTERS.map((k) => GEN_COL[k]);
+    groups.forEach((group) => {
+      const section = document.createElement('section');
+      section.className = 'peaks-split__group';
+
+      const headerBar = document.createElement('div');
+      headerBar.className = 'peaks-split__headerbar';
+      const heading = document.createElement('h2');
+      heading.className = 'peaks-split__heading';
+      heading.textContent = group.label;
+      headerBar.appendChild(heading);
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'summit-btn peaks-split__copy';
+      copyBtn.textContent = 'Copy';
+      copyBtn.title = 'Copy just this date\u2019s table \u2014 pastes into Word as a Heading 2 followed by a table';
+      copyBtn.addEventListener('click', async () => {
+        const html = buildGroupClipboardHTML(group);
+        const text = buildGroupClipboardText(group);
+        const ok = await copyRichHTML(html, text);
+        const n = group.rows.length;
+        showToast(ok ? ('Copied ' + group.label + ' (' + n + ' row' + (n === 1 ? '' : 's') + ').') : 'Copy failed \u2014 try again.');
+      });
+      headerBar.appendChild(copyBtn);
+      section.appendChild(headerBar);
+
+      const table = document.createElement('table');
+      table.className = 'peaks-split__table';
+      const thead = document.createElement('thead');
+      const headRow = document.createElement('tr');
+      cols.forEach((c) => {
+        const th = document.createElement('th');
+        th.textContent = colLabel(c);
+        headRow.appendChild(th);
+      });
+      thead.appendChild(headRow);
+      table.appendChild(thead);
+
+      const tbodyEl = document.createElement('tbody');
+      group.rows.forEach((r) => {
+        const tr = document.createElement('tr');
+        cols.forEach((c) => {
+          const td = document.createElement('td');
+          const sourceTd = cellsEl[r][c];
+          if (sourceTd) td.innerHTML = cellInnerHTMLForClipboard(sourceTd);
+          tr.appendChild(td);
+        });
+        tbodyEl.appendChild(tr);
+      });
+      table.appendChild(tbodyEl);
+      section.appendChild(table);
+
+      splitView.appendChild(section);
+    });
+  }
+
+  if (splitToggle) {
+    splitToggle.addEventListener('change', () => {
+      const on = splitToggle.checked;
+      if (on && editingCell) commitEdit();
+      scrollEl.hidden = on;
+      splitView.hidden = !on;
+      if (on) renderSplitView();
+    });
+  }
 
   window.Summit = window.Summit || { state: { mountain: {}, peaks: {}, draft: {} } };
   window.Summit.peaks = {
