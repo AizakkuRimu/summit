@@ -2346,6 +2346,23 @@
     return td ? td.textContent.trim() : '';
   }
 
+  // Formats a date typed in column H (d/m/yyyy, d-m-yyyy, or d.m.yyyy —
+  // same separators parseSplitDate accepts below) as "8 July 2026" for
+  // the generated letter. Anything that doesn't match that shape (blank,
+  // already-worded text, a different format) is left exactly as typed.
+  const LONG_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+
+  function formatLongDate(text) {
+    const m = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/.exec(text.trim());
+    if (!m) return text;
+    const d = +m[1], mo = +m[2];
+    let y = +m[3];
+    if (y < 100) y += 2000;
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return text;
+    return d + ' ' + LONG_MONTH_NAMES[mo - 1] + ' ' + y;
+  }
+
   // "Non-Prisoner" contains the substring "Prisoner" too, so this only
   // counts a bare "Prisoner" mention, not a "Non-Prisoner" one.
   function isPrisonerFlag(lText) {
@@ -2384,7 +2401,8 @@
       : channel === 'hardcopy-prisoner' ? ENDLINER_HARDCOPY_PRISONER
       : ENDLINER_HARDCOPY_NONPRISONER;
 
-    const refLine = prisoner ? 'We refer to your letter request received on ' + h : 'We refer to your enquiry of ' + h;
+    const hFormatted = formatLongDate(h);
+    const refLine = prisoner ? 'We refer to your letter request received on ' + hFormatted : 'We refer to your enquiry of ' + hFormatted;
     const salutation = 'Dear ' + [j, k].filter(Boolean).join(' ');
 
     const lines = [salutation, refLine];
