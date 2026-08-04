@@ -2649,30 +2649,53 @@
     group.colWidths = widths;
   }
 
-  // Word only recognises an mso-style-name when it's declared in a
-  // <style> block against a CSS class (the way Word's own "Save as
-  // Filtered HTML" output does it) and applied to the element via
-  // class="...". An inline style="mso-style-name:..." attribute on the
-  // element itself is silently ignored — which is why the table text was
-  // still coming in as Heading 2 even after naming it "No Spacing" that
-  // way. Using real classes tied to a <style> block, as below, is what
-  // Word's importer actually reads. The inline font-family/size/colour on
-  // each <p> is a visual-only fallback for target documents that don't
-  // have a "No Spacing" style defined at all.
+  // Word's "Merge Formatting" paste mode (the default a lot of people
+  // have) discards the source's paragraph/character *styles* entirely
+  // and substitutes whatever style is active at the destination cursor —
+  // that's why "Heading 2" pasted onto an existing Heading 2 came through
+  // in the destination's own font. What Merge Formatting does keep is
+  // *direct* character formatting layered on top of a style (the same
+  // way manually selecting text and clicking a font/colour button in
+  // Word survives a style change). So each run below carries its
+  // font-family/size/colour as an explicit inline override, not just a
+  // style name, precisely so it survives Merge Formatting too.
   const CLIPBOARD_STYLE_BLOCK =
     '<style>' +
-    'h2.peaksHeading2{mso-style-name:"Heading 2";}' +
+    'h2.peaksHeading2{mso-style-name:"Heading 2";font-family:"Aptos Serif",serif;font-size:12.0pt;color:#0F4761;}' +
     'p.peaksNoSpacing,li.peaksNoSpacing,div.peaksNoSpacing' +
-    '{mso-style-name:"No Spacing";mso-style-unhide:no;mso-style-qformat:yes;' +
-    'mso-style-parent:"";margin:0in;font-size:10.0pt;font-family:"Aptos Serif",serif;color:black;}' +
+    '{mso-style-name:"No Spacing";mso-style-unhide:no;mso-style-priority:1;mso-style-qformat:yes;' +
+    'mso-style-parent:"";margin:0in;margin-bottom:.0001pt;mso-pagination:widow-orphan;' +
+    'font-size:10.0pt;font-family:"Aptos Serif",serif;color:black;}' +
     '</style>';
 
-  const CLIPBOARD_CELL_FONT_STYLE =
-    'margin:0;font-family:"Aptos Serif";font-size:10pt;color:#000000;font-weight:normal;';
+  const CLIPBOARD_HEADING_RUN_STYLE = 'font-family:"Aptos Serif",serif;font-size:12.0pt;color:#0F4761;';
+  const CLIPBOARD_BODY_RUN_STYLE = 'font-family:"Aptos Serif",serif;font-size:10.0pt;color:black;font-weight:normal;font-style:normal;text-decoration:none;';
+  const CLIPBOARD_LINK_RUN_STYLE = 'font-family:"Aptos Serif",serif;font-size:10.0pt;color:#0F4761;font-weight:normal;font-style:normal;text-decoration:underline;';
+
+  // Same shape as cellInnerHTMLForClipboard (plain text -> escaped text,
+  // <a> -> a link), but every run carries its own direct inline style —
+  // CLIPBOARD_LINK_RUN_STYLE for hyperlinks, CLIPBOARD_BODY_RUN_STYLE for
+  // everything else — so Merge Formatting has real character formatting
+  // to preserve instead of just an inherited paragraph style.
+  function cellInnerHTMLForWordExport(td) {
+    let html = '';
+    td.childNodes.forEach((node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        html += '<span style="' + CLIPBOARD_BODY_RUN_STYLE + '">' + escapeHtml(node.textContent).replace(/\n/g, '<br>') + '</span>';
+      } else if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'A') {
+        html += '<a href="' + escapeHtml(node.getAttribute('href') || '') + '" style="' + CLIPBOARD_LINK_RUN_STYLE + '">'
+          + escapeHtml(node.textContent) + '</a>';
+      } else {
+        html += '<span style="' + CLIPBOARD_BODY_RUN_STYLE + '">' + escapeHtml(node.textContent || '') + '</span>';
+      }
+    });
+    return html;
+  }
 
   function buildGroupClipboardHTML(group) {
     const cols = SPLIT_COL_LETTERS.map((k) => GEN_COL[k]);
-    let html = '<h2 class="peaksHeading2">' + escapeHtml(formatLongDate(group.label)) + '</h2>';
+    let html = '<h2 class="peaksHeading2"><span style="' + CLIPBOARD_HEADING_RUN_STYLE + '">'
+      + escapeHtml(formatLongDate(group.label)) + '</span></h2>';
     const tableStyle = 'border-collapse:collapse;' + (group.colWidths ? ' table-layout:fixed;' : '');
     html += '<table border="1" cellspacing="0" cellpadding="4" style="' + tableStyle + '">';
     if (group.colWidths) {
@@ -2682,8 +2705,9 @@
     group.rows.forEach((r) => {
       html += '<tr>' + cols.map((c) => {
         const td = cellsEl[r][c];
-        const inner = td ? cellInnerHTMLForClipboard(td) : '';
-        return '<td><p class="peaksNoSpacing" style="' + CLIPBOARD_CELL_FONT_STYLE + '">' + inner + '</p></td>';
+        const inner = td ? cellInnerHTMLForWordExport(td) : '';
+        return '<td><p class="peaksNoSpacing" style="margin:0in;margin-bottom:.0001pt;mso-pagination:widow-orphan;font-size:10.0pt;font-family:&quot;Aptos Serif&quot;,serif;color:black;">'
+          + inner + '</p></td>';
       }).join('') + '</tr>';
     });
     html += '</tbody></table>';
