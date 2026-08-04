@@ -82,7 +82,8 @@
   const rowHeaderEls = []; // rowHeaderEls[r] -> th
   const colHeaderEls = []; // colHeaderEls[c] -> th
 
-  let selection = null;   // { r1, c1, r2, c2 }
+  let selection = null;   // { r1, c1, r2, c2 } — the active/most-recent range
+  let extraRanges = [];   // additional ranges frozen in via Shift+click, forming a multi-selection
   let anchor = null;      // { r, c } — where the current drag/selection began
   let primaryCell = null; // { r, c } — the cell currently showing the primary ring
   let isSelecting = false;
@@ -234,6 +235,7 @@
   }
 
   function setSelection(r1, c1, r2, c2) {
+    hideCutGapMenu();
     if (selection) paintSelection(selection, false);
     if (primaryCell) cellsEl[primaryCell.r][primaryCell.c].classList.remove('peaks-cell--primary');
 
@@ -275,9 +277,22 @@
     }
   }
 
+  // Every currently-selected range: the live/active `selection` plus any
+  // ranges frozen in via Shift+click (Section 3.1 multi-selection).
+  function allSelectedRanges() {
+    return selection ? extraRanges.concat([selection]) : extraRanges.slice();
+  }
+
   function forEachSelectedCell(fn) {
-    if (!selection) return;
-    forRange(selection, (r, c) => fn(cellsEl[r][c], r, c));
+    const seen = new Set();
+    allSelectedRanges().forEach((sel) => {
+      forRange(sel, (r, c) => {
+        const key = r + '_' + c;
+        if (seen.has(key)) return;
+        seen.add(key);
+        fn(cellsEl[r][c], r, c);
+      });
+    });
   }
 
   function coordsForSelection(sel) {
@@ -285,6 +300,46 @@
     if (!sel) return list;
     forRange(sel, (r, c) => list.push({ r, c }));
     return list;
+  }
+
+  // Union of coordinates across every selected range (active + frozen),
+  // de-duplicated — used so formatting/edit actions cover a whole
+  // Shift+click multi-selection, not just the most recently clicked range.
+  function coordsForAllSelections() {
+    const seen = new Set();
+    const list = [];
+    allSelectedRanges().forEach((sel) => {
+      forRange(sel, (r, c) => {
+        const key = r + '_' + c;
+        if (seen.has(key)) return;
+        seen.add(key);
+        list.push({ r, c });
+      });
+    });
+    return list;
+  }
+
+  // Unpaints and discards any frozen multi-selection ranges — called
+  // whenever a plain (non-Shift) click/drag starts a fresh selection.
+  function clearExtraRanges() {
+    if (!extraRanges.length) return;
+    extraRanges.forEach((r) => paintSelection(r, false));
+    extraRanges = [];
+  }
+
+  // Moves the current active `selection` into the frozen extraRanges list
+  // so a following setSelection() call for the new range leaves it (and
+  // every other already-frozen range) highlighted rather than clearing it.
+  function freezeCurrentSelection() {
+    if (selection) extraRanges.push(selection);
+  }
+
+  // setSelection() always unpaints whatever the active `selection` was
+  // before painting the new one — including a range that was just frozen
+  // into extraRanges by the call above. Re-painting every frozen range
+  // afterward keeps the whole multi-selection visibly highlighted.
+  function repaintExtraRanges() {
+    extraRanges.forEach((r) => paintSelection(r, true));
   }
 
   // ============================================================
@@ -336,6 +391,74 @@
     td.className = snap.dataClasses.concat(transientNow).join(' ');
     td.rowSpan = snap.rowSpan;
     td.colSpan = snap.colSpan;
+  }
+
+  // ---------- Cut: shifting neighbouring cells into the vacated gap ----------
+  //
+  // Used right after a Cut has cleared its source range, if the person
+  // picks "Shift cells left" / "Shift cells up" from the small chooser
+  // that appears afterward. Moves each cell's full appearance (text,
+  // links, styling) — reuses the same snapshot/restore shape as undo.
+
+  function moveCellContent(fromR, fromC, toR, toC) {
+    const snap = snapshotCell(fromR, fromC);
+    snap.r = toR;
+    snap.c = toC;
+    restoreCellSnapshot(snap);
+  }
+
+  function clearCellContent(r, c) {
+    const td = cellsEl[r][c];
+    td.innerHTML = '';
+    td.removeAttribute('style');
+    const transientNow = Array.from(td.classList).filter((cls) => TRANSIENT_CLASSES.has(cls));
+    td.className = ['peaks-cell'].concat(transientNow).join(' ');
+    td.rowSpan = 1;
+    td.colSpan = 1;
+  }
+
+  // Pulls every cell to the right of `range` (within its row-span) left by
+  // the range's width, leaving the trailing columns blank — mirrors
+  // Excel's "Delete → Shift cells left".
+  function shiftRangeLeft(range) {
+    const width = range.c2 - range.c1 + 1;
+    for (let r = range.r1; r <= range.r2; r++) {
+      for (let c = range.c1; c < numCols; c++) {
+        const srcC = c + width;
+        if (srcC < numCols) moveCellContent(r, srcC, r, c);
+        else clearCellContent(r, c);
+      }
+    }
+  }
+
+  // Pulls every cell below `range` (within its col-span) up by the
+  // range's height, leaving the trailing rows blank — mirrors Excel's
+  // "Delete → Shift cells up".
+  function shiftRangeUp(range) {
+    const height = range.r2 - range.r1 + 1;
+    for (let c = range.c1; c <= range.c2; c++) {
+      for (let r = range.r1; r < numRows; r++) {
+        const srcR = r + height;
+        if (srcR < numRows) moveCellContent(srcR, c, r, c);
+        else clearCellContent(r, c);
+      }
+    }
+  }
+
+  function coordsForShiftLeft(range) {
+    const list = [];
+    for (let r = range.r1; r <= range.r2; r++) {
+      for (let c = range.c1; c < numCols; c++) list.push({ r, c });
+    }
+    return list;
+  }
+
+  function coordsForShiftUp(range) {
+    const list = [];
+    for (let c = range.c1; c <= range.c2; c++) {
+      for (let r = range.r1; r < numRows; r++) list.push({ r, c });
+    }
+    return list;
   }
 
   function syncMergedMastersFor(coords) {
@@ -449,6 +572,7 @@
 
   function moveSelection(dr, dc) {
     if (!anchor) return;
+    clearExtraRanges();
     const r = Math.min(Math.max(anchor.r + dr, 0), numRows - 1);
     const c = Math.min(Math.max(anchor.c + dc, 0), numCols - 1);
     anchor = { r, c };
@@ -486,9 +610,15 @@
       if (editingCell) commitEdit();
       const r = +td.dataset.row, c = +td.dataset.col;
       e.preventDefault();
+      // Shift+click/drag freezes whatever was already selected (single
+      // range or an existing multi-selection) and starts a new range
+      // additively; a plain click/drag replaces the selection entirely.
+      if (e.shiftKey && selection) freezeCurrentSelection();
+      else clearExtraRanges();
       isSelecting = true;
       anchor = { r, c };
       setSelection(r, c, r, c);
+      repaintExtraRanges();
       focusCellVisually(td);
       return;
     }
@@ -497,8 +627,11 @@
     if (rowHead) {
       if (editingCell) commitEdit();
       const r = +rowHead.dataset.row;
+      if (e.shiftKey && selection) freezeCurrentSelection();
+      else clearExtraRanges();
       anchor = { r, c: 0 };
       setSelection(r, 0, r, numCols - 1);
+      repaintExtraRanges();
       focusCellVisually(cellsEl[r][0]);
     }
   });
@@ -509,13 +642,17 @@
     if (!colHead) return;
     if (editingCell) commitEdit();
     const c = +colHead.dataset.col;
+    if (e.shiftKey && selection) freezeCurrentSelection();
+    else clearExtraRanges();
     anchor = { r: 0, c };
     setSelection(0, c, numRows - 1, c);
+    repaintExtraRanges();
     focusCellVisually(cellsEl[0][c]);
   });
 
   corner.addEventListener('click', () => {
     if (editingCell) commitEdit();
+    clearExtraRanges();
     anchor = { r: 0, c: 0 };
     setSelection(0, 0, numRows - 1, numCols - 1);
     focusCellVisually(cellsEl[0][0]);
@@ -630,13 +767,17 @@
     e.preventDefault();
   });
 
-  // Double-clicking a column's resize line auto-fits just that column to
-  // its own longest content — other columns are never touched.
+  // Double-clicking a column's resize line resets just that column back to
+  // the default width — other columns are never touched. (A true
+  // Excel-style "fit to longest line of content" was tried here, but in
+  // practice it tended to stretch the whole column out further than felt
+  // useful; snapping back to the default width is the simpler, more
+  // predictable behaviour.)
   headerRow.addEventListener('dblclick', (e) => {
     if (!e.target.classList.contains('peaks-colhead__resize')) return;
     const th = e.target.parentElement;
     const c = +th.dataset.col;
-    autoFitColumn(c);
+    setColWidth(c, DEFAULT_COL_WIDTH);
     e.preventDefault();
   });
 
@@ -720,7 +861,7 @@
     else if (e.key === 'Enter' || e.key === 'F2') { e.preventDefault(); startEditing(anchor.r, anchor.c, { clear: false }); }
     else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
-      withHistory(coordsForSelection(selection), () => {
+      withHistory(coordsForAllSelections(), () => {
         forEachSelectedCell((td) => { td.textContent = ''; });
       });
     } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -878,11 +1019,57 @@
     e.preventDefault();
     e.clipboardData.setData('text/plain', selectionToTSV(selection));
     e.clipboardData.setData('text/html', selectionToHTML(selection));
-    if (isCut) {
-      withHistory(coordsForSelection(selection), () => {
-        forEachSelectedCell((td) => { td.textContent = ''; });
+    if (isCut) performCut();
+  }
+
+  // ---------- Cut: clear the source, then offer to shift neighbours in ----------
+  //
+  // Cutting clears the source range immediately (as it always did). Right
+  // after, a small chooser appears offering to pull the surrounding cells
+  // left or up to close the gap — Excel's "Delete → Shift cells left/up" —
+  // or it can simply be left blank (dismissing it, or doing nothing, keeps
+  // that default).
+
+  const cutGapMenu = document.getElementById('peaks-cut-gap-menu');
+  let pendingCutRange = null;
+  let pendingCutGapTimer = null;
+
+  function hideCutGapMenu() {
+    if (cutGapMenu) cutGapMenu.hidden = true;
+    pendingCutRange = null;
+    clearTimeout(pendingCutGapTimer);
+  }
+
+  function showCutGapMenu(range) {
+    pendingCutRange = range;
+    if (!cutGapMenu) return;
+    cutGapMenu.hidden = false;
+    clearTimeout(pendingCutGapTimer);
+    pendingCutGapTimer = setTimeout(hideCutGapMenu, 8000);
+  }
+
+  function performCut() {
+    const range = { r1: selection.r1, c1: selection.c1, r2: selection.r2, c2: selection.c2 };
+    withHistory(coordsForAllSelections(), () => {
+      forEachSelectedCell((td) => { td.textContent = ''; });
+    });
+    showCutGapMenu(range);
+  }
+
+  if (cutGapMenu) {
+    cutGapMenu.querySelectorAll('[data-cut-gap]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.cutGap;
+        const range = pendingCutRange;
+        hideCutGapMenu();
+        if (!range || mode === 'none') return;
+        if (mode === 'left') {
+          withHistory(coordsForShiftLeft(range), () => shiftRangeLeft(range));
+        } else if (mode === 'up') {
+          withHistory(coordsForShiftUp(range), () => shiftRangeUp(range));
+        }
       });
-    }
+    });
   }
 
   // ============================================================
@@ -926,6 +1113,7 @@
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && pendingPasteMode) disarmPasteMode();
+    if (e.key === 'Escape' && pendingCutRange) hideCutGapMenu();
   });
 
   document.addEventListener('keydown', (e) => {
@@ -983,7 +1171,7 @@
         // A single copied cell pasted onto a multi-cell selection fills
         // the whole selection with it, same as Excel/Sheets.
         const runs = richMatrix[0][0];
-        withHistory(coordsForSelection(selection), () => {
+        withHistory(coordsForAllSelections(), () => {
           forEachSelectedCell((td) => { writeRunsToCell(td, runs); });
         });
         return;
@@ -995,7 +1183,7 @@
     if (singleValue && !mode && (selection.r1 !== selection.r2 || selection.c1 !== selection.c2)) {
       // A single copied value pasted onto a multi-cell selection fills
       // the whole selection with it, same as Excel/Sheets.
-      withHistory(coordsForSelection(selection), () => {
+      withHistory(coordsForAllSelections(), () => {
         forEachSelectedCell((td) => { td.textContent = matrix[0][0]; });
       });
       return;
@@ -1183,11 +1371,7 @@
       return;
     }
     if (name === 'cut') {
-      writeClipboardText(selectionToTSV(selection)).then(() => {
-        withHistory(coordsForSelection(selection), () => {
-          forEachSelectedCell((td) => { td.textContent = ''; });
-        });
-      });
+      writeClipboardText(selectionToTSV(selection)).then(() => { performCut(); });
       return;
     }
 
@@ -1210,7 +1394,7 @@
 
   let fillHistoryPending = null;
   fillInput.addEventListener('input', () => {
-    if (!fillHistoryPending) fillHistoryPending = beginHistory(coordsForSelection(selection));
+    if (!fillHistoryPending) fillHistoryPending = beginHistory(coordsForAllSelections());
     fillGlyph.style.background = fillInput.value;
     forEachSelectedCell((td) => { td.style.backgroundColor = fillInput.value; });
   });
@@ -1227,7 +1411,7 @@
 
   function applyBorder(edge) {
     if (!selection) return;
-    withHistory(coordsForSelection(selection), () => {
+    withHistory(coordsForAllSelections(), () => {
       if (edge === 'none') {
         forEachSelectedCell((td) => {
           td.style.borderTop = '';
@@ -1264,7 +1448,7 @@
   });
 
   document.getElementById('peaks-fill-clear').addEventListener('click', () => {
-    withHistory(coordsForSelection(selection), () => {
+    withHistory(coordsForAllSelections(), () => {
       forEachSelectedCell((td) => { td.style.backgroundColor = ''; });
     });
   });
@@ -1367,7 +1551,7 @@
         editingCell.td.normalize();
       });
     } else {
-      withHistory(coordsForSelection(selection), cellFn);
+      withHistory(coordsForAllSelections(), cellFn);
     }
     syncToolbarState();
   }
@@ -1462,14 +1646,14 @@
   // ---------- Alignment / wrap (always whole-cell) ----------
 
   function setHAlign(value) {
-    withHistory(coordsForSelection(selection), () => {
+    withHistory(coordsForAllSelections(), () => {
       forEachSelectedCell((td) => { td.style.textAlign = value; });
     });
     syncToolbarState();
   }
 
   function setVAlign(value) {
-    withHistory(coordsForSelection(selection), () => {
+    withHistory(coordsForAllSelections(), () => {
       forEachSelectedCell((td) => { td.style.verticalAlign = value; });
     });
     syncToolbarState();
@@ -1479,7 +1663,7 @@
     const p = primaryTd();
     if (!p) return;
     const turnOn = !p.classList.contains('peaks-cell--wrap');
-    withHistory(coordsForSelection(selection), () => {
+    withHistory(coordsForAllSelections(), () => {
       forEachSelectedCell((td, r) => {
         td.classList.toggle('peaks-cell--wrap', turnOn);
         if (turnOn && rowHeights[r] <= DEFAULT_ROW_HEIGHT) {
@@ -1541,7 +1725,7 @@
 
   function toggleList(kind) {
     if (editingCell) commitEdit();
-    withHistory(coordsForSelection(selection), () => {
+    withHistory(coordsForAllSelections(), () => {
       forEachSelectedCell((td) => {
         const existingMarker = td.querySelector('span.peaks-list-marker');
         const existingKind = existingMarker ? existingMarker.dataset.kind : null;
@@ -1616,7 +1800,7 @@
     const url = window.prompt('Enter URL for the selected cell(s):', existing);
     if (!url) return;
     if (editingCell) commitEdit();
-    withHistory(coordsForSelection(selection), () => {
+    withHistory(coordsForAllSelections(), () => {
       forEachSelectedCell((td) => {
         unwrapLinksIn(td);
         const text = td.textContent;
@@ -1648,7 +1832,7 @@
     }
 
     if (editingCell) commitEdit();
-    withHistory(coordsForSelection(selection), () => {
+    withHistory(coordsForAllSelections(), () => {
       forEachSelectedCell((td) => unwrapLinksIn(td));
     });
     syncToolbarState();
@@ -1780,7 +1964,7 @@
     }
 
     if (editingCell) commitEdit();
-    withHistory(coordsForSelection(selection), () => {
+    withHistory(coordsForAllSelections(), () => {
       forEachSelectedCell((td) => {
         td.style.cssText = '';
         td.classList.remove('peaks-cell--wrap');
@@ -2257,7 +2441,11 @@
       rowsToWrite.forEach(({ r, text }) => writeTemplateToCell(r, text));
     });
     const n = rowsToWrite.length;
-    if (generateStatusEl) generateStatusEl.textContent = 'Generated ' + n + ' template' + (n === 1 ? '' : 's') + ' into column N.';
+    if (generateStatusEl) {
+      const msg = 'Generated ' + n + ' template' + (n === 1 ? '' : 's') + ' into column N.';
+      generateStatusEl.textContent = msg;
+      generateStatusEl.title = msg;
+    }
     showToast('Generated ' + n + ' reply template' + (n === 1 ? '' : 's') + '.');
   }
 
@@ -2317,10 +2505,140 @@
     });
   }
 
+  // ---------- Split-view column sizing ----------
+  //
+  // G–J are forced onto a single line each (their column is sized to fit
+  // the longest value in that column, no wrapping). K is allowed to wrap,
+  // but sized so nothing needs more than 2 lines. Whatever width is left
+  // over after G–K are settled is split across L / M / N as roughly
+  // 30% / 35% / 35%. Keeps the split tables from turning into a wall of
+  // near-equal, mostly-empty columns.
+
+  const SPLIT_NOWRAP_COLS = ['G', 'H', 'I', 'J'];
+  const SPLIT_MIN_COL_WIDTH = 50;
+  const SPLIT_CELL_H_PADDING = 18; // .peaks-split__table td padding (6px 8px) + border, roughly
+
+  let splitMeasureCtx = null;
+  function getSplitTextWidth(text, sampleEl) {
+    if (!splitMeasureCtx) splitMeasureCtx = document.createElement('canvas').getContext('2d');
+    const s = getComputedStyle(sampleEl);
+    splitMeasureCtx.font = `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`;
+    let max = 0;
+    String(text).split('\n').forEach((line) => {
+      const w = splitMeasureCtx.measureText(line).width;
+      if (w > max) max = w;
+    });
+    return max;
+  }
+
+  let splitProbeEl = null;
+  function splitLineCount(sampleEl, text, width) {
+    if (!splitProbeEl) {
+      splitProbeEl = document.createElement('div');
+      splitProbeEl.style.position = 'absolute';
+      splitProbeEl.style.visibility = 'hidden';
+      splitProbeEl.style.left = '-9999px';
+      splitProbeEl.style.top = '0';
+      splitProbeEl.style.boxSizing = 'border-box';
+      splitProbeEl.style.whiteSpace = 'pre-line';
+      splitProbeEl.style.wordBreak = 'break-word';
+      document.body.appendChild(splitProbeEl);
+    }
+    const s = getComputedStyle(sampleEl);
+    splitProbeEl.style.padding = s.padding;
+    splitProbeEl.style.fontFamily = s.fontFamily;
+    splitProbeEl.style.fontSize = s.fontSize;
+    splitProbeEl.style.fontWeight = s.fontWeight;
+    splitProbeEl.style.lineHeight = s.lineHeight;
+    splitProbeEl.style.width = width + 'px';
+    splitProbeEl.textContent = text;
+    const lh = parseFloat(s.lineHeight);
+    const lineHeightPx = isNaN(lh) ? parseFloat(s.fontSize) * 1.3 : lh;
+    return Math.max(1, Math.round(splitProbeEl.scrollHeight / lineHeightPx));
+  }
+
+  // Smallest width (within [minW, maxW]) at which every text in `texts`
+  // wraps to no more than `maxLines` lines.
+  function minWidthForMaxLines(sampleEl, texts, maxLines, minW, maxW) {
+    let lo = Math.max(1, Math.round(minW));
+    let hi = Math.max(lo, Math.round(maxW));
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const ok = texts.every((t) => splitLineCount(sampleEl, t, mid) <= maxLines);
+      if (ok) hi = mid; else lo = mid + 1;
+    }
+    return lo;
+  }
+
+  // Computes pixel widths for G–N per the rules above, stashes them on
+  // `group.colWidths` (so the Copy buttons can reuse the same widths in
+  // the exported table), and applies them to the live <table> via a
+  // <colgroup> + table-layout: fixed so the browser doesn't re-flex them.
+  function applySplitColumnWidths(table, group) {
+    const cols = SPLIT_COL_LETTERS.map((k) => GEN_COL[k]);
+    const headRowEl = table.querySelector('thead tr');
+    const bodyRows = table.querySelectorAll('tbody tr');
+    const sampleTd = (bodyRows[0] && bodyRows[0].children[0]) || (headRowEl && headRowEl.children[0]);
+    if (!sampleTd) return;
+
+    const textsByLetter = {};
+    SPLIT_COL_LETTERS.forEach((letter, i) => {
+      const c = cols[i];
+      textsByLetter[letter] = group.rows.map((r) => (cellsEl[r][c] ? cellsEl[r][c].textContent : ''));
+    });
+
+    const widths = {};
+    let usedWidth = 0;
+
+    SPLIT_NOWRAP_COLS.forEach((letter) => {
+      const maxTextW = textsByLetter[letter].reduce((m, t) => Math.max(m, getSplitTextWidth(t, sampleTd)), 0);
+      const w = Math.max(SPLIT_MIN_COL_WIDTH, Math.ceil(maxTextW) + SPLIT_CELL_H_PADDING);
+      widths[letter] = w;
+      usedWidth += w;
+    });
+
+    {
+      const texts = textsByLetter.K;
+      const naturalMax = texts.reduce((m, t) => Math.max(m, getSplitTextWidth(t, sampleTd)), 0) + SPLIT_CELL_H_PADDING;
+      const w = minWidthForMaxLines(sampleTd, texts, 2, SPLIT_MIN_COL_WIDTH, Math.max(SPLIT_MIN_COL_WIDTH, naturalMax));
+      widths.K = w;
+      usedWidth += w;
+    }
+
+    const totalWidth = table.clientWidth || table.getBoundingClientRect().width || 0;
+    let remaining = totalWidth - usedWidth - (SPLIT_COL_LETTERS.length + 1); // rough border allowance
+    if (remaining < 3 * SPLIT_MIN_COL_WIDTH) remaining = 3 * SPLIT_MIN_COL_WIDTH; // let it scroll rather than crush L/M/N
+
+    widths.L = Math.round(remaining * 0.30);
+    widths.M = Math.round(remaining * 0.35);
+    widths.N = remaining - widths.L - widths.M; // exact remainder to N
+
+    const colgroup = document.createElement('colgroup');
+    SPLIT_COL_LETTERS.forEach((letter) => {
+      const col = document.createElement('col');
+      col.style.width = widths[letter] + 'px';
+      colgroup.appendChild(col);
+    });
+    table.insertBefore(colgroup, table.firstChild);
+    table.style.tableLayout = 'fixed';
+
+    SPLIT_NOWRAP_COLS.forEach((letter) => {
+      const i = SPLIT_COL_LETTERS.indexOf(letter);
+      if (headRowEl && headRowEl.children[i]) headRowEl.children[i].classList.add('peaks-split__col--nowrap');
+      bodyRows.forEach((tr) => { if (tr.children[i]) tr.children[i].classList.add('peaks-split__col--nowrap'); });
+    });
+
+    group.colWidths = widths;
+  }
+
   function buildGroupClipboardHTML(group) {
     const cols = SPLIT_COL_LETTERS.map((k) => GEN_COL[k]);
     let html = '<h2>' + escapeHtml(group.label) + '</h2>';
-    html += '<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;">';
+    const tableStyle = 'border-collapse:collapse;' + (group.colWidths ? ' table-layout:fixed;' : '');
+    html += '<table border="1" cellspacing="0" cellpadding="4" style="' + tableStyle + '">';
+    if (group.colWidths) {
+      html += '<colgroup>' + SPLIT_COL_LETTERS.map((letter) => '<col style="width:' + group.colWidths[letter] + 'px">').join('') + '</colgroup>';
+    }
     html += '<thead><tr>' + cols.map((c) => '<th>' + escapeHtml(colLabel(c)) + '</th>').join('') + '</tr></thead><tbody>';
     group.rows.forEach((r) => {
       html += '<tr>' + cols.map((c) => {
@@ -2467,6 +2785,7 @@
       section.appendChild(table);
 
       splitView.appendChild(section);
+      applySplitColumnWidths(table, group);
     });
   }
 
