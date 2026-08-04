@@ -2649,23 +2649,44 @@
     group.colWidths = widths;
   }
 
+  // Word decides each pasted block's paragraph style (Heading 2, Normal,
+  // ...) from the mso-style-name it can find for that block, falling back
+  // to whatever style was last named if a block doesn't carry one of its
+  // own. A bare <h2> followed by a <table> whose cells are plain text (no
+  // <p> wrapper) leaves the table with nothing of its own to name, so it
+  // inherits the heading's "Heading 2" instead of "Normal". Naming every
+  // block explicitly — the h2 as Heading 2, and every header/body cell's
+  // content wrapped in its own Normal-named <p> — closes that gap.
   function buildGroupClipboardHTML(group) {
     const cols = SPLIT_COL_LETTERS.map((k) => GEN_COL[k]);
-    let html = '<h2>' + escapeHtml(group.label) + '</h2>';
-    const tableStyle = 'border-collapse:collapse;' + (group.colWidths ? ' table-layout:fixed;' : '');
+    let html = '<h2 style="mso-style-name:&quot;Heading 2&quot;">' + escapeHtml(group.label) + '</h2>';
+    const tableStyle = 'mso-style-name:&quot;Table Normal&quot;;border-collapse:collapse;' + (group.colWidths ? ' table-layout:fixed;' : '');
     html += '<table border="1" cellspacing="0" cellpadding="4" style="' + tableStyle + '">';
     if (group.colWidths) {
       html += '<colgroup>' + SPLIT_COL_LETTERS.map((letter) => '<col style="width:' + group.colWidths[letter] + 'px">').join('') + '</colgroup>';
     }
-    html += '<thead><tr>' + cols.map((c) => '<th>' + escapeHtml(colLabel(c)) + '</th>').join('') + '</tr></thead><tbody>';
+    html += '<thead><tr>' + cols.map((c) =>
+      '<th><p style="mso-style-name:&quot;Normal&quot;;margin:0;font-weight:bold;">' + escapeHtml(colLabel(c)) + '</p></th>'
+    ).join('') + '</tr></thead><tbody>';
     group.rows.forEach((r) => {
       html += '<tr>' + cols.map((c) => {
         const td = cellsEl[r][c];
-        return '<td>' + (td ? cellInnerHTMLForClipboard(td) : '') + '</td>';
+        const inner = td ? cellInnerHTMLForClipboard(td) : '';
+        return '<td><p style="mso-style-name:&quot;Normal&quot;;margin:0;font-weight:normal;">' + inner + '</p></td>';
       }).join('') + '</tr>';
     });
     html += '</tbody></table>';
     return html;
+  }
+
+  // Wraps a body fragment (one or more h2+table groups) as a full HTML
+  // document. Word's HTML importer is more reliable at respecting the
+  // per-block mso-style-name hints above when they arrive inside a real
+  // <html><head>...<body> document rather than a bare fragment.
+  function wordClipboardDocument(bodyHtml) {
+    return '<!DOCTYPE html><html xmlns:o="urn:schemas-microsoft-com:office:office" '
+      + 'xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">'
+      + '<head><meta charset="utf-8"></head><body>' + bodyHtml + '</body></html>';
   }
 
   function buildGroupClipboardText(group) {
@@ -2740,7 +2761,7 @@
       copyAllBtn.textContent = 'Copy All Groups';
       copyAllBtn.title = 'Copy every date group \u2014 each as its own Heading 2 + table \u2014 in one paste';
       copyAllBtn.addEventListener('click', async () => {
-        const html = groups.map(buildGroupClipboardHTML).join('');
+        const html = wordClipboardDocument(groups.map(buildGroupClipboardHTML).join(''));
         const text = groups.map(buildGroupClipboardText).join('\n\n');
         const ok = await copyRichHTML(html, text);
         showToast(ok ? ('Copied all ' + groups.length + ' date groups.') : 'Copy failed \u2014 try again.');
@@ -2767,7 +2788,7 @@
       copyBtn.textContent = 'Copy';
       copyBtn.title = 'Copy just this date\u2019s table \u2014 pastes into Word as a Heading 2 followed by a table';
       copyBtn.addEventListener('click', async () => {
-        const html = buildGroupClipboardHTML(group);
+        const html = wordClipboardDocument(buildGroupClipboardHTML(group));
         const text = buildGroupClipboardText(group);
         const ok = await copyRichHTML(html, text);
         const n = group.rows.length;
