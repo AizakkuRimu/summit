@@ -2402,7 +2402,7 @@
       : ENDLINER_HARDCOPY_NONPRISONER;
 
     const hFormatted = formatLongDate(h);
-    const refLine = prisoner ? 'We refer to your letter request received on ' + hFormatted : 'We refer to your enquiry of ' + hFormatted;
+    const refLine = prisoner ? 'We refer to your letter request received on ' + hFormatted + '.' : 'We refer to your enquiry of ' + hFormatted + '.';
     const salutation = 'Dear ' + [j, k].filter(Boolean).join(' ');
 
     const lines = [salutation, refLine];

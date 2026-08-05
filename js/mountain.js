@@ -27,6 +27,9 @@
   const forecolorGlyph = document.getElementById('mountain-forecolor-glyph');
   const hilitecolorGlyph = document.getElementById('mountain-hilite-glyph');
 
+  const undoBtn = document.getElementById('mountain-undo');
+  const redoBtn = document.getElementById('mountain-redo');
+
   const linkPopover = document.getElementById('mountain-link-popover');
   const linkInput = document.getElementById('mountain-link-input');
   const fontSizeInput = document.getElementById('mountain-fontsize-input');
@@ -87,6 +90,155 @@
     return key === 'z' || key === 'y';
   }
 
+  // ============================================================
+  // Undo / redo history
+  //
+  // The browser's native undo is intentionally disabled (see the
+  // keydown handler in attachPageListeners below) because repagination
+  // moves paragraphs between page bodies with plain DOM calls, which
+  // desyncs the browser's own undo stack from the DOM. Instead we keep
+  // our own history: snapshots of every page body's innerHTML, taken
+  // before and after each change.
+  //
+  // A snapshot is the whole set of page bodies rather than a single
+  // page, since an edit (or its undo) can shift content across a page
+  // boundary; restoring page-by-page keeps that in sync automatically.
+  //
+  // Typing is grouped: a burst of keystrokes with no pause longer than
+  // HISTORY_IDLE_MS becomes a single undo step, the same way Word/most
+  // editors batch typing rather than undoing one character at a time.
+  // Toolbar actions (bold, lists, colour, links, paste...) each close
+  // out any pending typing burst and become their own standalone step.
+  // ============================================================
+
+  const HISTORY_LIMIT = 100;
+  const HISTORY_IDLE_MS = 600;
+
+  let undoStack = [];
+  let redoStack = [];
+  let isApplyingHistory = false;
+  let pendingBefore = null;
+  let historyIdleTimer = null;
+
+  function snapshotPages() {
+    return pages.map((p) => p.body.innerHTML);
+  }
+
+  function snapshotsEqual(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  function restorePages(snapshot) {
+    while (pages.length < snapshot.length) ensurePage(pages.length);
+    while (pages.length > snapshot.length) {
+      const last = pages.pop();
+      pagesContainer.removeChild(last.el);
+    }
+    pages.forEach((p, i) => {
+      p.body.innerHTML = snapshot[i];
+      updateEmptyState(p.body);
+    });
+    renumberPages();
+
+    // Land the cursor at the end of the document, focused, so typing
+    // can continue right away — restoring the exact original caret
+    // position isn't reliable once the underlying nodes have been
+    // replaced wholesale.
+    const last = pages[pages.length - 1];
+    if (last) {
+      last.body.focus();
+      const sel = window.getSelection();
+      const r = document.createRange();
+      r.selectNodeContents(last.body);
+      r.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      activeBody = last.body;
+    }
+  }
+
+  function updateHistoryButtons() {
+    if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+    if (redoBtn) redoBtn.disabled = redoStack.length === 0;
+  }
+
+  function pushHistoryEntry(before, after) {
+    if (snapshotsEqual(before, after)) return;
+    undoStack.push({ before, after });
+    if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+    redoStack = [];
+    updateHistoryButtons();
+  }
+
+  // Marks the start of a change burst (first keystroke after idle).
+  // Safe to call repeatedly — only the first call in a burst counts.
+  function noteHistoryBefore() {
+    if (isApplyingHistory) return;
+    if (pendingBefore === null) pendingBefore = snapshotPages();
+  }
+
+  // Called after each change; closes the burst into one undo step once
+  // HISTORY_IDLE_MS passes with no further changes.
+  function noteHistoryAfter() {
+    if (isApplyingHistory || pendingBefore === null) return;
+    clearTimeout(historyIdleTimer);
+    historyIdleTimer = setTimeout(() => {
+      const after = snapshotPages();
+      pushHistoryEntry(pendingBefore, after);
+      pendingBefore = null;
+    }, HISTORY_IDLE_MS);
+  }
+
+  // Closes out any in-progress typing burst immediately, so a toolbar
+  // action or undo/redo itself doesn't get merged with prior typing.
+  function flushHistory() {
+    if (pendingBefore === null) return;
+    clearTimeout(historyIdleTimer);
+    const after = snapshotPages();
+    pushHistoryEntry(pendingBefore, after);
+    pendingBefore = null;
+  }
+
+  // Wraps a single discrete action (toolbar button, paste, link edit...)
+  // as its own standalone undo step.
+  function recordHistoryStep(fn) {
+    flushHistory();
+    const before = snapshotPages();
+    isApplyingHistory = true;
+    fn();
+    isApplyingHistory = false;
+    const after = snapshotPages();
+    pushHistoryEntry(before, after);
+  }
+
+  function undo() {
+    flushHistory();
+    if (!undoStack.length) return;
+    const entry = undoStack.pop();
+    isApplyingHistory = true;
+    restorePages(entry.before);
+    isApplyingHistory = false;
+    redoStack.push(entry);
+    updateHistoryButtons();
+    schedulePagination();
+  }
+
+  function redo() {
+    if (!redoStack.length) return;
+    const entry = redoStack.pop();
+    isApplyingHistory = true;
+    restorePages(entry.after);
+    isApplyingHistory = false;
+    undoStack.push(entry);
+    updateHistoryButtons();
+    schedulePagination();
+  }
+
+  if (undoBtn) undoBtn.addEventListener('click', undo);
+  if (redoBtn) redoBtn.addEventListener('click', redo);
+
   // Ctrl+Shift+V / Cmd+Shift+V — "paste and match [page] formatting".
   // The browser still fires a normal `paste` event for this shortcut, so
   // we just flag it here and read the flag once, in handlePaste.
@@ -96,22 +248,33 @@
   }
 
   function attachPageListeners(body) {
+    // Captured before the DOM actually mutates, so it's a true "before"
+    // snapshot — only takes effect at the start of a burst (see
+    // noteHistoryBefore).
+    body.addEventListener('beforeinput', () => noteHistoryBefore());
     body.addEventListener('input', () => {
       updateEmptyState(body);
       schedulePagination();
+      noteHistoryAfter();
     });
     body.addEventListener('paste', handlePaste);
     body.addEventListener('copy', handleCopyOrCut);
     body.addEventListener('cut', handleCopyOrCut);
     // The browser's native undo/redo isn't aware that repagination moves
     // paragraphs between page bodies with plain DOM calls, not
-    // execCommand. Letting undo run against that can desync the
-    // browser's internal edit state from the DOM — the editor then
+    // execCommand. Letting the native version run against that can desync
+    // the browser's internal edit state from the DOM — the editor then
     // stops responding to clicks until some other edit (e.g. a spelling
     // fix) forces a repagination pass that happens to resync things.
-    // Blocking the shortcut here avoids that broken state entirely.
+    // So the shortcut is still blocked from reaching the browser, but now
+    // it drives our own history stack instead of just doing nothing.
     body.addEventListener('keydown', (e) => {
-      if (isUndoRedoShortcut(e)) e.preventDefault();
+      if (isUndoRedoShortcut(e)) {
+        e.preventDefault();
+        if (e.shiftKey || e.key.toLowerCase() === 'y') redo();
+        else undo();
+        return;
+      }
       if (isPasteMatchStyleShortcut(e)) pasteMatchStyleArmed = true;
     });
     body.addEventListener('focus', () => {
@@ -270,22 +433,22 @@
     const action = target.dataset.action;
 
     if (cmd) {
-      document.execCommand(cmd, false, null);
+      recordHistoryStep(() => document.execCommand(cmd, false, null));
       updateToolbarState();
       schedulePagination();
       return;
     }
 
     switch (action) {
-      case 'font-size-increase': adjustFontSize(2); break;
-      case 'font-size-decrease': adjustFontSize(-2); break;
-      case 'uppercase': transformCase('upper'); break;
-      case 'lowercase': transformCase('lower'); break;
-      case 'indent': document.execCommand('indent', false, null); break;
-      case 'outdent': document.execCommand('outdent', false, null); break;
-      case 'link': openLinkPopover(); break;
-      case 'unlink': removeLink(); break;
-      case 'clear-format': clearFormatting(); break;
+      case 'font-size-increase': recordHistoryStep(() => adjustFontSize(2)); break;
+      case 'font-size-decrease': recordHistoryStep(() => adjustFontSize(-2)); break;
+      case 'uppercase': recordHistoryStep(() => transformCase('upper')); break;
+      case 'lowercase': recordHistoryStep(() => transformCase('lower')); break;
+      case 'indent': recordHistoryStep(() => document.execCommand('indent', false, null)); break;
+      case 'outdent': recordHistoryStep(() => document.execCommand('outdent', false, null)); break;
+      case 'link': openLinkPopover(); break; // opens a popover; saveLink/removeLink record the step
+      case 'unlink': recordHistoryStep(() => removeLink()); break;
+      case 'clear-format': recordHistoryStep(() => clearFormatting()); break;
       default: break;
     }
     schedulePagination();
@@ -335,11 +498,13 @@
 
     const cmd = input.dataset.cmd;
     const value = input.value;
-    let ok = false;
-    try { ok = document.execCommand(cmd, false, value); } catch (err) { /* ignore */ }
-    if (!ok && cmd === 'hiliteColor') {
-      try { document.execCommand('backColor', false, value); } catch (err) { /* ignore */ }
-    }
+    recordHistoryStep(() => {
+      let ok = false;
+      try { ok = document.execCommand(cmd, false, value); } catch (err) { /* ignore */ }
+      if (!ok && cmd === 'hiliteColor') {
+        try { document.execCommand('backColor', false, value); } catch (err) { /* ignore */ }
+      }
+    });
 
     if (cmd === 'foreColor') {
       forecolorGlyph.style.color = value;
@@ -439,7 +604,7 @@
     sel.removeAllRanges();
     sel.addRange(savedFontSizeRange);
 
-    wrapRangeInFontSize(savedFontSizeRange, size);
+    recordHistoryStep(() => wrapRangeInFontSize(savedFontSizeRange, size));
     schedulePagination();
     updateFontSizeDisplay();
     fontSizeInput.blur();
@@ -591,21 +756,23 @@
       sel.addRange(savedLinkRange);
     }
 
-    if (editingLinkEl) {
-      editingLinkEl.setAttribute('href', url);
-      editingLinkEl.setAttribute('title', url);
-    } else {
-      document.execCommand('createLink', false, url);
-      const sel2 = window.getSelection();
-      if (sel2.rangeCount) {
-        const link = getAncestorLink(sel2.getRangeAt(0).startContainer);
-        if (link) {
-          link.setAttribute('target', '_blank');
-          link.setAttribute('rel', 'noopener noreferrer');
-          link.setAttribute('title', url);
+    recordHistoryStep(() => {
+      if (editingLinkEl) {
+        editingLinkEl.setAttribute('href', url);
+        editingLinkEl.setAttribute('title', url);
+      } else {
+        document.execCommand('createLink', false, url);
+        const sel2 = window.getSelection();
+        if (sel2.rangeCount) {
+          const link = getAncestorLink(sel2.getRangeAt(0).startContainer);
+          if (link) {
+            link.setAttribute('target', '_blank');
+            link.setAttribute('rel', 'noopener noreferrer');
+            link.setAttribute('title', url);
+          }
         }
       }
-    }
+    });
 
     closeLinkPopover();
     schedulePagination();
@@ -925,12 +1092,14 @@
     const matchStyle = pasteMatchStyleArmed;
     pasteMatchStyleArmed = false;
 
-    if (html) {
-      document.execCommand('insertHTML', false, matchStyle ? matchPageFormatting(html) : sanitizeHTML(html));
-    } else {
-      const text = clipboardData.getData('text/plain');
-      document.execCommand('insertText', false, text);
-    }
+    recordHistoryStep(() => {
+      if (html) {
+        document.execCommand('insertHTML', false, matchStyle ? matchPageFormatting(html) : sanitizeHTML(html));
+      } else {
+        const text = clipboardData.getData('text/plain');
+        document.execCommand('insertText', false, text);
+      }
+    });
     schedulePagination();
   }
 
@@ -958,7 +1127,7 @@
     if (ordered) {
       return '@list l' + listNum + ':level' + (level + 1) + '\n' +
         '  {mso-level-number-format:decimal;\n' +
-        '  mso-level-text:%' + (level + 1) + '.;\n' +
+        '  mso-level-text:%' + (level + 1) + '\\.;\n' +
         '  mso-level-tab-stop:none;\n' +
         '  mso-level-number-position:left;\n' +
         '  margin-left:' + indent + ';\n' +
@@ -1160,7 +1329,7 @@
     e.clipboardData.setData('text/plain', wrapperToPlainText(wrapper));
     e.preventDefault();
 
-    if (e.type === 'cut') document.execCommand('delete', false, null);
+    if (e.type === 'cut') recordHistoryStep(() => document.execCommand('delete', false, null));
   }
 
   // ============================================================
@@ -1205,35 +1374,37 @@
     // lets the normal pagination engine reflow the new content across
     // as many pages as it needs.
     loadHTML: (html) => {
-      while (pages.length > 1) {
-        const last = pages.pop();
-        pagesContainer.removeChild(last.el);
-      }
-      const first = pages[0] || ensurePage(0);
+      recordHistoryStep(() => {
+        while (pages.length > 1) {
+          const last = pages.pop();
+          pagesContainer.removeChild(last.el);
+        }
+        const first = pages[0] || ensurePage(0);
 
-      const wrapper = document.createElement('div');
-      wrapper.innerHTML = html || '';
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = html || '';
 
-      // The pagination engine moves whole top-level children between
-      // pages, so bare inline/text content (no wrapping block element)
-      // wouldn't have anything to move — wrap it in a single paragraph.
-      const hasBlockChild = Array.from(wrapper.children).some((el) =>
-        ['P', 'DIV', 'UL', 'OL', 'TABLE', 'H1', 'H2', 'H3', 'BLOCKQUOTE'].includes(el.tagName));
-      if (!hasBlockChild) {
-        const p = document.createElement('p');
-        p.innerHTML = wrapper.innerHTML || '<br>';
-        wrapper.innerHTML = '';
-        wrapper.appendChild(p);
-      }
+        // The pagination engine moves whole top-level children between
+        // pages, so bare inline/text content (no wrapping block element)
+        // wouldn't have anything to move — wrap it in a single paragraph.
+        const hasBlockChild = Array.from(wrapper.children).some((el) =>
+          ['P', 'DIV', 'UL', 'OL', 'TABLE', 'H1', 'H2', 'H3', 'BLOCKQUOTE'].includes(el.tagName));
+        if (!hasBlockChild) {
+          const p = document.createElement('p');
+          p.innerHTML = wrapper.innerHTML || '<br>';
+          wrapper.innerHTML = '';
+          wrapper.appendChild(p);
+        }
 
-      first.body.innerHTML = wrapper.innerHTML;
-      if (!first.body.firstElementChild) {
-        const p = document.createElement('p');
-        p.appendChild(document.createElement('br'));
-        first.body.appendChild(p);
-      }
-      updateEmptyState(first.body);
-      repaginate();
+        first.body.innerHTML = wrapper.innerHTML;
+        if (!first.body.firstElementChild) {
+          const p = document.createElement('p');
+          p.appendChild(document.createElement('br'));
+          first.body.appendChild(p);
+        }
+        updateEmptyState(first.body);
+        repaginate();
+      });
     }
   };
 })();
