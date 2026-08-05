@@ -2529,8 +2529,9 @@
   // the longest value in that column, no wrapping). K is allowed to wrap,
   // but sized so nothing needs more than 2 lines. Whatever width is left
   // over after G–K are settled is split across L / M / N as roughly
-  // 30% / 35% / 35%. Keeps the split tables from turning into a wall of
-  // near-equal, mostly-empty columns.
+  // 20% / 20% / 60% — N (the generated letter text) gets the lion's
+  // share, with L and M splitting the rest evenly. Keeps the split
+  // tables from turning into a wall of near-equal, mostly-empty columns.
 
   const SPLIT_NOWRAP_COLS = ['G', 'H', 'I', 'J'];
   const SPLIT_MIN_COL_WIDTH = 50;
@@ -2627,8 +2628,8 @@
     let remaining = totalWidth - usedWidth - (SPLIT_COL_LETTERS.length + 1); // rough border allowance
     if (remaining < 3 * SPLIT_MIN_COL_WIDTH) remaining = 3 * SPLIT_MIN_COL_WIDTH; // let it scroll rather than crush L/M/N
 
-    widths.L = Math.round(remaining * 0.30);
-    widths.M = Math.round(remaining * 0.35);
+    widths.L = Math.round(remaining * 0.20);
+    widths.M = Math.round(remaining * 0.20);
     widths.N = remaining - widths.L - widths.M; // exact remainder to N
 
     const colgroup = document.createElement('colgroup');
