@@ -2705,17 +2705,33 @@
     const cols = SPLIT_COL_LETTERS.map((k) => GEN_COL[k]);
     let html = '<h2 class="peaksHeading2"><span style="' + CLIPBOARD_HEADING_RUN_STYLE + '">'
       + escapeHtml(formatLongDate(group.label)) + '</span></h2>';
-    const tableStyle = 'border-collapse:collapse;' + (group.colWidths ? ' table-layout:fixed;' : '');
-    html += '<table border="1" cellspacing="0" cellpadding="4" style="' + tableStyle + '">';
+
+    // Word's HTML paste importer doesn't reliably honour <colgroup><col
+    // style="width">. Left to itself it auto-fits the table to the pasted
+    // content, which is what was silently throwing the 20/20/60 ratio away
+    // even though the colgroup (kept below for other paste targets) was
+    // correct. Word does read a fixed layout off the <table> itself and a
+    // per-cell width, so both are set explicitly here to force it.
+    const totalWidth = group.colWidths
+      ? SPLIT_COL_LETTERS.reduce((sum, letter) => sum + group.colWidths[letter], 0)
+      : null;
+    const tableStyle = 'border-collapse:collapse;'
+      + (group.colWidths ? ' table-layout:fixed;mso-table-layout-alt:fixed;width:' + totalWidth + 'px;' : '');
+    html += '<table border="1" cellspacing="0" cellpadding="4" style="' + tableStyle + '"'
+      + (totalWidth !== null ? ' width="' + totalWidth + '"' : '') + '>';
     if (group.colWidths) {
       html += '<colgroup>' + SPLIT_COL_LETTERS.map((letter) => '<col style="width:' + group.colWidths[letter] + 'px">').join('') + '</colgroup>';
     }
     html += '<tbody>';
     group.rows.forEach((r) => {
-      html += '<tr>' + cols.map((c) => {
+      html += '<tr>' + cols.map((c, i) => {
         const td = cellsEl[r][c];
         const inner = td ? cellInnerHTMLForWordExport(td) : '';
-        return '<td><p class="peaksNoSpacing" style="margin:0in;margin-bottom:.0001pt;mso-pagination:widow-orphan;font-size:10.0pt;font-family:&quot;Aptos Serif&quot;,serif;color:black;">'
+        const letter = SPLIT_COL_LETTERS[i];
+        const cellWidthAttrs = group.colWidths
+          ? ' width="' + group.colWidths[letter] + '" style="width:' + group.colWidths[letter] + 'px;"'
+          : '';
+        return '<td' + cellWidthAttrs + '><p class="peaksNoSpacing" style="margin:0in;margin-bottom:.0001pt;mso-pagination:widow-orphan;font-size:10.0pt;font-family:&quot;Aptos Serif&quot;,serif;color:black;">'
           + inner + '</p></td>';
       }).join('') + '</tr>';
     });
