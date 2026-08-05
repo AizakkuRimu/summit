@@ -60,6 +60,17 @@
 
         <div class="summit-toolbar mountain-toolbar" role="toolbar" aria-label="Mountain formatting toolbar">
 
+          <div class="summit-toolbar__group" data-group="history">
+            <button type="button" class="summit-btn summit-btn--glyph" id="mountain-undo" aria-label="Undo" title="Undo (Ctrl+Z)" disabled>
+              <svg viewBox="0 0 20 20"><path d="M4 8 H12 a4 4 0 0 1 0 8 H9" fill="none"/><path d="M7.5 4 L3.5 8 L7.5 12" fill="none"/></svg>
+            </button>
+            <button type="button" class="summit-btn summit-btn--glyph" id="mountain-redo" aria-label="Redo" title="Redo (Ctrl+Y)" disabled>
+              <svg viewBox="0 0 20 20"><path d="M16 8 H8 a4 4 0 0 0 0 8 H11" fill="none"/><path d="M12.5 4 L16.5 8 L12.5 12" fill="none"/></svg>
+            </button>
+          </div>
+
+          <div class="summit-toolbar__divider"></div>
+
           <div class="summit-toolbar__group" data-group="marks">
             <button type="button" class="summit-btn summit-btn--glyph" data-cmd="bold" aria-label="Bold" aria-pressed="false" title="Bold (Ctrl+B)"><b>B</b></button>
             <button type="button" class="summit-btn summit-btn--glyph summit-btn--italic" data-cmd="italic" aria-label="Italic" aria-pressed="false" title="Italic (Ctrl+I)"><i>I</i></button>
