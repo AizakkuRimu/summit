@@ -267,6 +267,69 @@
   padding: 4px 2px 2px;
 }
 
+/* Context card: the Sub-Enquiry dropped in via the tree's + bullet.
+   Sits above the Duplicate/Move action row so it's clear what those
+   buttons apply to. */
+.summit-bot__context {
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bronze-soft);
+  border: 1px solid var(--bronze);
+}
+
+.summit-bot__context-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.summit-bot__context-path {
+  font-size: 11px;
+  color: var(--gray);
+  margin-top: 2px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Duplicate / Move / Duplicate then Move — a plain button row, not a
+   speech bubble, so it reads as actions rather than something said. */
+.summit-bot__actions {
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.summit-bot__action-btn {
+  flex: none;
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  background: var(--stone-raised);
+  color: var(--ink);
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.summit-bot__action-btn:hover {
+  background: var(--bronze-soft);
+  border-color: var(--bronze);
+}
+
+.summit-bot__action-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .summit-bot__inputrow {
   flex: none;
   display: flex;

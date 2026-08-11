@@ -533,14 +533,54 @@
 }
 
 .draft-node[data-level="scheme"] > .draft-node__row .draft-node__label { font-weight: 600; }
-.draft-node[data-level="subenquiry"] > .draft-node__row::before {
-  content: "";
+
+/* Sub-Enquiry bullet: a quiet 4px dot at rest, same as before. On
+   hover/focus it becomes a clickable plus that sends the Sub-Enquiry
+   into Summit Bot's chat (see draft.js onSend / bot.js sendSubEnquiry). */
+.draft-node__bullet {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  padding: 0;
+  margin-right: 2px;
+  color: var(--bronze-deep);
+  cursor: pointer;
+}
+
+.draft-node__bullet-dot {
   width: 4px;
   height: 4px;
   border-radius: 50%;
   background: var(--bronze);
-  flex: none;
-  margin-right: 2px;
+  display: block;
+}
+
+.draft-node__bullet-plus {
+  display: none;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.draft-node__bullet:hover,
+.draft-node__bullet:focus-visible {
+  background: var(--bronze-soft);
+}
+
+.draft-node__bullet:hover .draft-node__bullet-dot,
+.draft-node__bullet:focus-visible .draft-node__bullet-dot {
+  display: none;
+}
+
+.draft-node__bullet:hover .draft-node__bullet-plus,
+.draft-node__bullet:focus-visible .draft-node__bullet-plus {
+  display: block;
 }
 
 /* ---------- 5.3 Template linking / detail panel ---------- */
