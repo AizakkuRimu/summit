@@ -121,22 +121,15 @@
   closeBtn.addEventListener('click', closePanel);
 
   // ============================================================
-  // /duplicate — searchable Sub-Enquiry picker, rendered as its
-  // own bot bubble so it scrolls and wraps with the rest of the
-  // conversation instead of floating off in a separate popup.
+  // Generic searchable picker, rendered as its own full-width bot
+  // bubble so it scrolls and wraps with the rest of the conversation
+  // instead of floating off in a separate popup. Used by both the
+  // /duplicate command and the Move destination picker below.
   // ============================================================
 
-  function renderDuplicatePicker() {
-    const draftApi = window.Summit && window.Summit.draft;
-    const all = draftApi && typeof draftApi.listSubEnquiries === 'function'
-      ? draftApi.listSubEnquiries()
-      : [];
-
-    if (all.length === 0) {
-      addMessage(
-        'Scanned the hierarchy \u2014 no Sub-Enquiries out there yet. Add one in the Draft tab, then send /duplicate again.',
-        'bot'
-      );
+  function renderPicker({ items, emptyText, introText, searchPlaceholder, searchLabel, onPick }) {
+    if (items.length === 0) {
+      addMessage(emptyText, 'bot');
       return;
     }
 
@@ -145,30 +138,30 @@
 
     const intro = document.createElement('p');
     intro.className = 'summit-bot__picker-intro';
-    intro.textContent = 'Found ' + all.length + ' sub-enquir' + (all.length === 1 ? 'y' : 'ies') + '. Search or pick one to duplicate:';
+    intro.textContent = introText;
     bubble.appendChild(intro);
 
     const search = document.createElement('input');
     search.type = 'text';
     search.className = 'summit-bot__picker-search';
-    search.placeholder = 'Search by name or path\u2026';
-    search.setAttribute('aria-label', 'Search sub-enquiries to duplicate');
+    search.placeholder = searchPlaceholder;
+    search.setAttribute('aria-label', searchLabel);
     bubble.appendChild(search);
 
     const list = document.createElement('ul');
     list.className = 'summit-bot__picker-list';
     bubble.appendChild(list);
 
-    function renderList(items) {
+    function renderList(filteredItems) {
       list.innerHTML = '';
-      if (items.length === 0) {
+      if (filteredItems.length === 0) {
         const empty = document.createElement('li');
         empty.className = 'summit-bot__picker-empty';
         empty.textContent = 'Nothing matches that search.';
         list.appendChild(empty);
         return;
       }
-      items.forEach((entry) => {
+      filteredItems.forEach((entry) => {
         const li = document.createElement('li');
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -189,12 +182,7 @@
         btn.addEventListener('click', () => {
           search.disabled = true;
           Array.from(list.querySelectorAll('button')).forEach((b) => { b.disabled = true; });
-          const newId = draftApi.duplicateSubEnquiry(entry.id);
-          if (newId) {
-            addMessage('Duplicate complete \u2014 "' + entry.name + '" is copied and open in the Draft tab.', 'bot');
-          } else {
-            addMessage('That one\u2019s gone missing \u2014 try /duplicate again to refresh the list.', 'bot');
-          }
+          onPick(entry);
         });
 
         li.appendChild(btn);
@@ -202,12 +190,12 @@
       });
     }
 
-    renderList(all);
+    renderList(items);
 
     search.addEventListener('input', () => {
       const q = search.value.trim().toLowerCase();
-      if (!q) { renderList(all); return; }
-      const filtered = all.filter((entry) =>
+      if (!q) { renderList(items); return; }
+      const filtered = items.filter((entry) =>
         entry.name.toLowerCase().includes(q) || (entry.path && entry.path.toLowerCase().includes(q))
       );
       renderList(filtered);
@@ -218,9 +206,129 @@
     search.focus();
   }
 
+  // /duplicate — searchable Sub-Enquiry picker.
+  function renderDuplicatePicker() {
+    const draftApi = window.Summit && window.Summit.draft;
+    const all = draftApi && typeof draftApi.listSubEnquiries === 'function'
+      ? draftApi.listSubEnquiries()
+      : [];
+
+    renderPicker({
+      items: all,
+      emptyText: 'Scanned the hierarchy \u2014 no Sub-Enquiries out there yet. Add one in the Draft tab, then send /duplicate again.',
+      introText: 'Found ' + all.length + ' sub-enquir' + (all.length === 1 ? 'y' : 'ies') + '. Search or pick one to duplicate:',
+      searchPlaceholder: 'Search by name or path\u2026',
+      searchLabel: 'Search sub-enquiries to duplicate',
+      onPick: (entry) => {
+        const newId = draftApi.duplicateSubEnquiry(entry.id);
+        if (newId) {
+          addMessage('Duplicate complete \u2014 "' + entry.name + '" is copied and open in the Draft tab.', 'bot');
+        } else {
+          addMessage('That one\u2019s gone missing \u2014 try /duplicate again to refresh the list.', 'bot');
+        }
+      }
+    });
+  }
+
+  // Move destination picker — searchable list of Enquiry folders.
+  // `afterDuplicate` only changes the confirmation wording once the
+  // move lands, so "Duplicate then Move" reads correctly.
+  function renderMovePicker(subId, subName, afterDuplicate) {
+    const draftApi = window.Summit && window.Summit.draft;
+    const enquiries = draftApi && typeof draftApi.listEnquiries === 'function'
+      ? draftApi.listEnquiries()
+      : [];
+
+    renderPicker({
+      items: enquiries,
+      emptyText: 'No Enquiry folders to move into yet \u2014 add one in the Draft tab first.',
+      introText: 'Choose an Enquiry folder to move "' + subName + '" into:',
+      searchPlaceholder: 'Search Enquiry folders\u2026',
+      searchLabel: 'Search Enquiry folders to move into',
+      onPick: (entry) => {
+        const ok = draftApi.moveSubEnquiry(subId, entry.id);
+        if (ok) {
+          addMessage(
+            (afterDuplicate ? 'Duplicated and moved \u2014 "' : 'Moved \u2014 "') + subName + '" is now in "' + entry.name + '", open in the Draft tab.',
+            'bot'
+          );
+        } else {
+          addMessage('Couldn\u2019t complete the move \u2014 that Sub-Enquiry or folder is gone. Try again from the tree.', 'bot');
+        }
+      }
+    });
+  }
+
+  // ============================================================
+  // + bullet on a Sub-Enquiry in the tree — drops it into the chat
+  // as a context card, followed by Duplicate / Move / Duplicate then
+  // Move actions. Entry point is window.Summit.bot.sendSubEnquiry,
+  // called from draft.js's onSend handler (Section 5.2).
+  // ============================================================
+
+  function renderSubEnquiryActions(subId, name, path) {
+    const draftApi = window.Summit && window.Summit.draft;
+
+    const card = document.createElement('div');
+    card.className = 'summit-bot__msg summit-bot__msg--bot summit-bot__context';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'summit-bot__context-name';
+    nameEl.textContent = name;
+    card.appendChild(nameEl);
+    if (path) {
+      const pathEl = document.createElement('div');
+      pathEl.className = 'summit-bot__context-path';
+      pathEl.textContent = path;
+      card.appendChild(pathEl);
+    }
+    messagesEl.appendChild(card);
+
+    const actionsBubble = document.createElement('div');
+    actionsBubble.className = 'summit-bot__msg summit-bot__msg--bot summit-bot__actions';
+
+    function makeActionBtn(label, onClick) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'summit-bot__action-btn';
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        Array.from(actionsBubble.querySelectorAll('button')).forEach((b) => { b.disabled = true; });
+        onClick();
+      });
+      return btn;
+    }
+
+    actionsBubble.appendChild(makeActionBtn('Duplicate', () => {
+      const newId = draftApi.duplicateSubEnquiry(subId);
+      if (newId) {
+        addMessage('Duplicate complete \u2014 "' + name + '" is copied and open in the Draft tab.', 'bot');
+      } else {
+        addMessage('That one\u2019s gone missing \u2014 try again from the tree.', 'bot');
+      }
+    }));
+
+    actionsBubble.appendChild(makeActionBtn('Move', () => {
+      renderMovePicker(subId, name, false);
+    }));
+
+    actionsBubble.appendChild(makeActionBtn('Duplicate then Move', () => {
+      const newId = draftApi.duplicateSubEnquiry(subId);
+      if (!newId) {
+        addMessage('That one\u2019s gone missing \u2014 try again from the tree.', 'bot');
+        return;
+      }
+      addMessage('Duplicated \u2014 now pick where the copy should live:', 'bot');
+      renderMovePicker(newId, name, true);
+    }));
+
+    messagesEl.appendChild(actionsBubble);
+    scrollToBottom();
+  }
+
   const HELP_TEXT =
     'Here\u2019s what I can do so far:\n' +
     '\u2022 /duplicate \u2014 search for a Sub-Enquiry and make a copy of it\n' +
+    '\u2022 Hover the dot beside any Sub-Enquiry in the tree and click the + that appears \u2014 I\u2019ll offer to Duplicate, Move, or Duplicate then Move it\n' +
     '\u2022 /help \u2014 show this list\n' +
     'More commands are on the way as I learn the trail.';
 
@@ -264,4 +372,23 @@
       submitMessage();
     }
   });
+
+  // ============================================================
+  // Public API (mirrors window.Summit.draft) — lets draft.js hand a
+  // Sub-Enquiry over without knowing anything about the chat panel's
+  // internals.
+  // ============================================================
+
+  window.Summit = window.Summit || {};
+  window.Summit.bot = {
+    sendSubEnquiry(id) {
+      const draftApi = window.Summit && window.Summit.draft;
+      const entry = draftApi && typeof draftApi.getSubEnquiry === 'function'
+        ? draftApi.getSubEnquiry(id)
+        : null;
+      if (!entry) return;
+      openPanel();
+      renderSubEnquiryActions(entry.id, entry.name, entry.path);
+    }
+  };
 })();

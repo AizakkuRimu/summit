@@ -332,6 +332,17 @@
       .filter(Boolean).join(' \u203A ');
   }
 
+  // Same as pathForSubEnquiry but for an Enquiry itself — used by
+  // Summit Bot's Move picker to show which folder each destination
+  // sits in.
+  function pathForEnquiry(id) {
+    const enq = state.enquiries[id];
+    if (!enq) return '';
+    const cat = state.categories[enq.categoryId];
+    const scheme = cat ? state.schemes[cat.schemeId] : null;
+    return [scheme && scheme.name, cat && cat.name, enq.name].filter(Boolean).join(' \u203A ');
+  }
+
   // ============================================================
   // 5.2 — Hierarchy tree (manual builder)
   // ============================================================
@@ -503,10 +514,29 @@
     return btn;
   }
 
-  function makeNodeRow({ id, level, name, hasChildren, childCount, isSelected, isOpen, isMatch, onToggle, onSelect, onAdd, onRename, onDelete, onCopy }) {
+  // The Sub-Enquiry bullet doubles as a "send to Sherpa" button: it
+  // sits still as a small dot until hovered, when it swaps to a plus
+  // sign. Clicking it hands the Sub-Enquiry to Summit Bot, which
+  // offers Duplicate / Move / Duplicate then Move (Section bot.js).
+  function makeBulletButton(name, onSend) {
+    const bullet = document.createElement('button');
+    bullet.type = 'button';
+    bullet.className = 'draft-node__bullet';
+    bullet.title = 'Add to Sherpa chat';
+    bullet.setAttribute('aria-label', 'Add "' + name + '" to Sherpa chat');
+    bullet.innerHTML =
+      '<span class="draft-node__bullet-dot" aria-hidden="true"></span>' +
+      '<span class="draft-node__bullet-plus" aria-hidden="true">+</span>';
+    bullet.addEventListener('click', (e) => { e.stopPropagation(); onSend(); });
+    return bullet;
+  }
+
+  function makeNodeRow({ id, level, name, hasChildren, childCount, isSelected, isOpen, isMatch, onToggle, onSelect, onAdd, onRename, onDelete, onCopy, onSend }) {
     const row = document.createElement('div');
     row.className = 'draft-node__row' + (isSelected ? ' is-selected' : '') + (isMatch ? ' is-search-match' : '');
     row.setAttribute('role', 'treeitem');
+
+    if (onSend) row.appendChild(makeBulletButton(name, onSend));
 
     const open = typeof isOpen === 'boolean' ? isOpen : expandedIds.has(id);
     const toggle = document.createElement('button');
@@ -701,6 +731,11 @@
         renderAll();
       },
       onCopy: () => sub.name,
+      onSend: () => {
+        if (window.Summit.bot && typeof window.Summit.bot.sendSubEnquiry === 'function') {
+          window.Summit.bot.sendSubEnquiry(subId);
+        }
+      },
       onRename: () => {
         openNameHelper(sub.name, (name) => {
           sub.name = name;
@@ -3357,6 +3392,42 @@
         name: state.subEnquiries[id].name,
         path: pathForSubEnquiry(id)
       })).sort((a, b) => a.name.localeCompare(b.name));
+    },
+
+    // Single Sub-Enquiry lookup with its breadcrumb path — used by
+    // Summit Bot when the tree's + bullet hands one over to the chat.
+    getSubEnquiry(id) {
+      const sub = state.subEnquiries[id];
+      if (!sub) return null;
+      return { id, name: sub.name, path: pathForSubEnquiry(id), enquiryId: sub.enquiryId };
+    },
+
+    // Flat list of every Enquiry (folder) with its own breadcrumb path
+    // — the destination list for Summit Bot's Move picker.
+    listEnquiries() {
+      return Object.keys(state.enquiries).map((id) => ({
+        id,
+        name: state.enquiries[id].name,
+        path: pathForEnquiry(id)
+      })).sort((a, b) => a.name.localeCompare(b.name));
+    },
+
+    // Moves a Sub-Enquiry into a different Enquiry folder in place —
+    // no copy, no rename, keywords/template/label travel with it.
+    // Returns true on success (including a no-op move to its current
+    // folder), false if the Sub-Enquiry or target folder is gone.
+    moveSubEnquiry(id, targetEnquiryId) {
+      const sub = state.subEnquiries[id];
+      const target = state.enquiries[targetEnquiryId];
+      if (!sub || !target) return false;
+      const oldEnq = state.enquiries[sub.enquiryId];
+      if (oldEnq && oldEnq.id === target.id) return true;
+      if (oldEnq) oldEnq.subEnquiryIds = oldEnq.subEnquiryIds.filter((sid) => sid !== id);
+      sub.enquiryId = targetEnquiryId;
+      target.subEnquiryIds.push(id);
+      showToast('Moved "' + sub.name + '" to "' + target.name + '"');
+      window.Summit.draft.focusSubEnquiry(id);
+      return true;
     },
 
     // Duplicates a Sub-Enquiry in place (same Enquiry parent), copying
