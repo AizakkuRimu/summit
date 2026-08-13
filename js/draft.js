@@ -1723,6 +1723,34 @@
     }
   }
 
+  // Pretty-printed source HTML (Word above all) puts a newline/indent
+  // right after an opening block tag and right before its closing tag.
+  // collapseInsignificantWhitespace above turns that into a single
+  // literal space, but only a browser's own layout would then discard
+  // a leading/trailing space at a block edge — our DOM text nodes keep
+  // it. Left in place, that stray space survives past the block's own
+  // </p> and lands right after the <br> we insert for it, i.e. as a
+  // one-space gap before the first word of the next paragraph. Trim it
+  // here, at the block level, before markers/<br>s are added.
+  function trimBlockEdgeWhitespace(root, blockSelector) {
+    Array.from(root.querySelectorAll(blockSelector)).forEach((el) => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let node;
+      let firstText = null;
+      while ((node = walker.nextNode())) {
+        if (node.nodeValue !== '') { firstText = node; break; }
+      }
+      if (firstText) firstText.nodeValue = firstText.nodeValue.replace(/^ +/, '');
+
+      const walker2 = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let lastText = null;
+      while ((node = walker2.nextNode())) {
+        if (node.nodeValue !== '') lastText = node;
+      }
+      if (lastText) lastText.nodeValue = lastText.nodeValue.replace(/ +$/, '');
+    });
+  }
+
   // ---------- Template editor: hyperlinks stay live ----------
   // draft-template-input is a contenteditable div (not a textarea) so
   // that a pasted hyperlink — or one added with "Insert link" — can
@@ -1833,8 +1861,10 @@
   // text, so the pasted hyperlink stays genuinely clickable.
   function htmlToTemplateFragment(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
+    const blockSelector = 'p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote';
     normalizeWordPasteArtifacts(doc.body);
     collapseInsignificantWhitespace(doc.body);
+    trimBlockEdgeWhitespace(doc.body, blockSelector);
 
     Array.from(doc.body.querySelectorAll('a[href]')).forEach((a) => {
       const href = (a.getAttribute('href') || '').trim();
@@ -1858,7 +1888,6 @@
       li.insertBefore(document.createTextNode(marker), li.firstChild);
     });
 
-    const blockSelector = 'p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote';
     Array.from(doc.body.querySelectorAll(blockSelector)).forEach((el) => {
       el.insertAdjacentHTML('afterend', '<br>');
     });
@@ -2159,6 +2188,81 @@
     return frag;
   }
 
+  // Truncates a templateSegmentsFor() segment list to `maxLen` plain-text
+  // characters without cutting a <a> segment's URL away from its label —
+  // the link stays a real, clickable link even when its display text has
+  // to be shortened at the cut point.
+  function truncateTemplateSegments(segments, maxLen) {
+    let total = 0;
+    const out = [];
+    for (const seg of segments) {
+      const val = seg.type === 'link' ? seg.text : seg.value;
+      if (total + val.length <= maxLen) {
+        out.push(seg);
+        total += val.length;
+        continue;
+      }
+      const remaining = maxLen - total;
+      if (remaining > 0) {
+        out.push(seg.type === 'link'
+          ? { type: 'link', text: val.slice(0, remaining), url: seg.url }
+          : { type: 'text', value: val.slice(0, remaining) });
+      }
+      return out;
+    }
+    return out;
+  }
+
+  // Shared by the Template Finder cards and the Deep-thinking/Reverse
+  // search cards: renders a template preview that keeps stored
+  // hyperlinks live (real, clickable <a> tags) instead of the flattened
+  // plain text those cards used to show, while still supporting the
+  // existing truncate/expand and search-term highlighting. Returns
+  // whether the full template is longer than the preview length.
+  function renderTemplateSnippetInto(container, sub, q, expanded) {
+    container.innerHTML = '';
+    const fullText = sub.template || '';
+    const isLong = fullText.length > 160;
+    const segments = templateSegmentsFor(fullText, subLinks(sub));
+    const shown = (expanded || !isLong) ? segments : truncateTemplateSegments(segments, 160);
+    shown.forEach((seg) => {
+      if (seg.type === 'link') {
+        const a = document.createElement('a');
+        a.setAttribute('href', seg.url);
+        a.setAttribute('target', '_blank');
+        a.setAttribute('rel', 'noopener');
+        a.appendChild(highlightedFragment(seg.text, q));
+        container.appendChild(a);
+      } else {
+        container.appendChild(highlightedFragment(seg.value, q));
+      }
+    });
+    if (!expanded && isLong) container.appendChild(document.createTextNode('\u2026'));
+    return isLong;
+  }
+
+  // Rich copy: puts both text/html (real <a> links) and a plain-text
+  // fallback on the clipboard, so pasting into a rich editor keeps the
+  // hyperlinks and pasting into a plain text field still gets the text.
+  async function copyTemplateRich(sub) {
+    const plain = sub.template || '';
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+      try {
+        const html = templateToHtml(sub);
+        const item = new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([plain], { type: 'text/plain' })
+        });
+        await navigator.clipboard.write([item]);
+        return true;
+      } catch (err) {
+        // fall through to plain-text copy below
+      }
+    }
+    await navigator.clipboard.writeText(plain);
+    return false;
+  }
+
   function findResultsCountText(shown, total, q) {
     if (total === 0) return '';
     if (q) {
@@ -2346,10 +2450,7 @@
     const expanded = expandedResultIds.has(sub.id);
     const snippet = document.createElement('p');
     snippet.className = 'draft-result__snippet';
-    const fullText = sub.template;
-    const isLong = fullText.length > 160;
-    const shown = expanded || !isLong ? fullText : fullText.slice(0, 160) + '\u2026';
-    snippet.appendChild(highlightedFragment(shown, q));
+    const isLong = renderTemplateSnippetInto(snippet, sub, q, expanded);
     card.appendChild(snippet);
 
     if (isLong) {
@@ -2373,8 +2474,8 @@
     copyBtn.textContent = 'Copy template';
     copyBtn.addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText(sub.template);
-        showToast('Template copied to clipboard.');
+        const rich = await copyTemplateRich(sub);
+        showToast(rich ? 'Template copied to clipboard (links kept).' : 'Template copied to clipboard.');
       } catch (err) {
         showToast('Could not copy — select and copy manually.');
       }
@@ -2528,8 +2629,7 @@
       const expanded = expandedSet.has(sub.id);
       const snippet = document.createElement('p');
       snippet.className = 'draft-result__snippet';
-      const isLong = sub.template.length > 160;
-      snippet.textContent = expanded || !isLong ? sub.template : sub.template.slice(0, 160) + '\u2026';
+      const isLong = renderTemplateSnippetInto(snippet, sub, null, expanded);
       card.appendChild(snippet);
 
       if (isLong) {
@@ -2560,8 +2660,8 @@
       copyBtn.textContent = 'Copy template';
       copyBtn.addEventListener('click', async () => {
         try {
-          await navigator.clipboard.writeText(sub.template);
-          showToast('Template copied to clipboard.');
+          const rich = await copyTemplateRich(sub);
+          showToast(rich ? 'Template copied to clipboard (links kept).' : 'Template copied to clipboard.');
         } catch (err) {
           showToast('Could not copy — select and copy manually.');
         }
