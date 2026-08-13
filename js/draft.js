@@ -3357,10 +3357,23 @@
     renderKeywordChips(reverseKeywordsEl, reverseKeywordsEmptyNote, reverseKeywords, { removable: true });
   }
 
+  // Every keyword that could make a Sub-Enquiry match — its general
+  // pool plus every one of its templates' own filed keywords. Reverse
+  // search operates at the Sub-Enquiry level (one card per match, with
+  // every template shown underneath), so unlike Template Finder it
+  // needs the union rather than one template's effective set.
+  function subAllKeywordsIncTemplates(sub) {
+    const all = (sub.keywords || []).slice();
+    subTemplates(sub).forEach((tpl) => {
+      (tpl.keywords || []).forEach((kw) => { if (!all.includes(kw)) all.push(kw); });
+    });
+    return all;
+  }
+
   function computeReverseMatches() {
     const matches = [];
     Object.values(state.subEnquiries).forEach((sub) => {
-      const { score, matched } = keywordOverlapScore(reverseKeywords, sub.keywords);
+      const { score, matched } = keywordOverlapScore(reverseKeywords, subAllKeywordsIncTemplates(sub));
       if (score > 0) matches.push({ sub, score, matched });
     });
     matches.sort((a, b) => b.score - a.score || pathForSubEnquiry(a.sub.id).localeCompare(pathForSubEnquiry(b.sub.id)));
@@ -3407,6 +3420,12 @@
           tplName.className = 'draft-result__template-name';
           tplName.textContent = tpl.name || 'Untitled';
           block.appendChild(tplName);
+        }
+        if ((tpl.keywords || []).length > 0) {
+          const tplKwWrap = document.createElement('div');
+          tplKwWrap.className = 'draft-result__keywords';
+          renderKeywordChips(tplKwWrap, document.createElement('span'), tpl.keywords, { highlightSet: new Set(matched) });
+          block.appendChild(tplKwWrap);
         }
         const snippet = document.createElement('p');
         snippet.className = 'draft-result__snippet';
