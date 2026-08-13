@@ -536,7 +536,10 @@
             <div class="draft-detail__content" id="draft-detail-content" hidden>
               <p class="draft-detail__path" id="draft-detail-path"></p>
 
-              <h3 class="draft-col__subtitle">Keywords filed here</h3>
+              <div class="draft-col__subtitle-row">
+                <h3 class="draft-col__subtitle">Keywords filed here</h3>
+                <button type="button" class="draft-remove-all-btn" id="draft-detail-keywords-clear-btn">Remove all</button>
+              </div>
               <div class="draft-keywords draft-keywords--filed" id="draft-detail-keywords"></div>
 
               <label class="draft-field-label" for="draft-label-input">Name/Term <span>(hashtag-style tags to sort templates by — add as many as you like, independent of the hierarchy above)</span></label>
@@ -549,9 +552,13 @@
               <div class="draft-template-list" id="draft-template-list"></div>
               <div class="draft-col__actions draft-col__actions--tight">
                 <button type="button" class="summit-btn" id="draft-template-add-btn">+ New template</button>
+                <button type="button" class="summit-btn" id="draft-quick-template-btn" title="Paste a raw enquiry + reply block (e.g. copied from a Word table) to auto-extract keywords and fill the next template slot">⚡ Quick add from paste</button>
               </div>
 
-              <h3 class="draft-col__subtitle" id="draft-template-keywords-title">Keywords for this template <span>(filed here via the Template picker in Paste &amp; extract, or added below)</span></h3>
+              <div class="draft-col__subtitle-row">
+                <h3 class="draft-col__subtitle" id="draft-template-keywords-title">Keywords for this template <span>(filed here via the Template picker in Paste &amp; extract, or added below)</span></h3>
+                <button type="button" class="draft-remove-all-btn" id="draft-template-keywords-clear-btn">Remove all</button>
+              </div>
               <div class="draft-keywords draft-keywords--filed" id="draft-template-keywords" aria-live="polite" aria-labelledby="draft-template-keywords-title"></div>
               <div class="draft-tag-input" id="draft-template-keyword-tags">
                 <input type="text" class="draft-tag-input__field" id="draft-template-keyword-input" placeholder="Type a keyword for this template, press Enter…" autocomplete="off">
