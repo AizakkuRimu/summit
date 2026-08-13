@@ -75,6 +75,7 @@
   const detailPath = document.getElementById('draft-detail-path');
   const detailKeywordsEl = document.getElementById('draft-detail-keywords');
   const labelInput = document.getElementById('draft-label-input');
+  const labelTagsEl = document.getElementById('draft-label-tags');
   const labelDatalist = document.getElementById('draft-label-datalist');
   const templateInput = document.getElementById('draft-template-input');
   const templateSaveBtn = document.getElementById('draft-template-save-btn');
@@ -160,6 +161,9 @@
   const deepResultsEl = document.getElementById('draft-deep-results');
   const deepEmptyNote = document.getElementById('draft-deep-empty');
   const deepCountEl = document.getElementById('draft-deep-count');
+  const deepLinksListEl = document.getElementById('draft-deep-links-list');
+  const deepLinksEmptyNote = document.getElementById('draft-deep-links-empty');
+  const deepLinksCountEl = document.getElementById('draft-deep-links-count');
   let deepIndex = []; // [{ subId, keywords: [...] }] — one entry per Sub-Enquiry with a template
   const expandedDeepIds = new Set();
 
@@ -283,10 +287,16 @@
   }
   function createSubEnquiry(enquiryId, name) {
     const id = uid('subenquiry');
-    state.subEnquiries[id] = { id, name, enquiryId, keywords: [], template: '', label: '' };
+    state.subEnquiries[id] = { id, name, enquiryId, keywords: [], template: '', labels: [], templateLinks: [] };
     state.enquiries[enquiryId].subEnquiryIds.push(id);
     return id;
   }
+
+  // Defensive accessors — every Sub-Enquiry created through
+  // createSubEnquiry() already has these, but keep call sites safe
+  // regardless (e.g. objects rebuilt during import).
+  function subLabels(sub) { return (sub && sub.labels) || []; }
+  function subLinks(sub) { return (sub && sub.templateLinks) || []; }
 
   function deleteScheme(id) {
     const scheme = state.schemes[id];
@@ -812,7 +822,52 @@
       'Select scheme\u2026', '+ New scheme\u2026'
     );
     fileSchemeSel.disabled = false;
-    resetDownstreamSelects('category');
+    if (!applySelectedChainToFileSelects()) resetDownstreamSelects('category');
+  }
+
+  // If a Sub-Enquiry is already selected in the Hierarchy (the person
+  // clicked it before pasting/extracting), mirror that same Scheme /
+  // Category / Enquiry / Sub-Enquiry chain into the "File these
+  // keywords" cascade automatically, instead of leaving it blank and
+  // making them reselect everything by hand. Returns true if it found
+  // a valid chain to apply.
+  function applySelectedChainToFileSelects() {
+    const subId = state.selectedSubEnquiryId;
+    const sub = subId ? state.subEnquiries[subId] : null;
+    if (!sub) return false;
+    const enq = state.enquiries[sub.enquiryId];
+    const cat = enq ? state.categories[enq.categoryId] : null;
+    const scheme = cat ? state.schemes[cat.schemeId] : null;
+    if (!enq || !cat || !scheme) return false;
+
+    fileSchemeSel.value = scheme.id;
+
+    fillSelect(
+      fileCategorySel,
+      scheme.categoryIds.map((id) => ({ id, name: state.categories[id].name })),
+      'Select category\u2026', '+ New category\u2026'
+    );
+    fileCategorySel.disabled = false;
+    fileCategorySel.value = cat.id;
+
+    fillSelect(
+      fileEnquirySel,
+      cat.enquiryIds.map((id) => ({ id, name: state.enquiries[id].name })),
+      'Select enquiry\u2026', '+ New enquiry\u2026'
+    );
+    fileEnquirySel.disabled = false;
+    fileEnquirySel.value = enq.id;
+
+    fillSelect(
+      fileSubSel,
+      enq.subEnquiryIds.map((id) => ({ id, name: state.subEnquiries[id].name })),
+      'Select sub-enquiry\u2026', '+ New sub-enquiry\u2026'
+    );
+    fileSubSel.disabled = false;
+    fileSubSel.value = sub.id;
+
+    updateFileButtonState();
+    return true;
   }
 
   function resetDownstreamSelects(fromLevel) {
@@ -1428,24 +1483,79 @@
       });
     }
 
-    labelInput.value = sub.label || '';
-    templateInput.value = sub.template || '';
+    renderLabelChips(subLabels(sub).slice());
+    renderTemplateIntoEditor(sub);
     templateStatus.textContent = sub.template ? 'Template attached.' : 'No template attached yet.';
     templateStatus.classList.toggle('is-saved', !!sub.template);
   }
 
   // ---------- Template Labellers ----------
-  // Every Sub-Enquiry can carry a free-text label (a person's name or
-  // a term) alongside its template — an extra axis of categorization
-  // independent of the Scheme/Category/Enquiry/Sub-Enquiry hierarchy.
-  // Persisted like everything else in state.subEnquiries, and rides
-  // along with the existing PATH:/KEYWORDS:/TEMPLATE: import/export
-  // format via a new LABEL: line (see Section 8 below).
+  // Every Sub-Enquiry can carry any number of free-text tags (a
+  // person's name, a recurring term, etc.) alongside its template —
+  // an extra axis of categorization independent of the
+  // Scheme/Category/Enquiry/Sub-Enquiry hierarchy. Persisted as
+  // sub.labels (array), and rides along with the existing
+  // PATH:/KEYWORDS:/TEMPLATE: import/export format via a LABEL: line
+  // (comma-separated — see Section 8 below).
+  //
+  // Editing happens against a transient `pendingLabels` array — like
+  // the Template textarea, changes only land on the Sub-Enquiry when
+  // "Save template" is clicked, so a half-typed tag or an accidental
+  // removal can still be abandoned by switching Sub-Enquiries.
+
+  let pendingLabels = [];
+
+  function renderLabelChips(labels) {
+    pendingLabels = labels;
+    if (!labelTagsEl) return;
+    labelTagsEl.querySelectorAll('.draft-chip').forEach((el) => el.remove());
+    pendingLabels.forEach((tag) => {
+      const chip = document.createElement('span');
+      chip.className = 'draft-chip';
+      const label = document.createElement('span');
+      label.textContent = tag;
+      chip.appendChild(label);
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'draft-chip__remove';
+      remove.setAttribute('aria-label', 'Remove tag ' + tag);
+      remove.textContent = '\u00D7';
+      remove.addEventListener('click', () => {
+        renderLabelChips(pendingLabels.filter((t) => t !== tag));
+      });
+      chip.appendChild(remove);
+      labelTagsEl.insertBefore(chip, labelInput);
+    });
+  }
+
+  function commitPendingLabelInput() {
+    const raw = (labelInput.value || '').trim();
+    labelInput.value = '';
+    if (!raw) return;
+    // A paste or fast typist may drop more than one tag in at once —
+    // split on comma so "alice, bob" still becomes two tags.
+    raw.split(',').map((t) => t.trim()).filter(Boolean).forEach((tag) => {
+      if (!pendingLabels.includes(tag)) pendingLabels = pendingLabels.concat([tag]);
+    });
+    renderLabelChips(pendingLabels);
+  }
+
+  if (labelInput) {
+    labelInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        commitPendingLabelInput();
+      } else if (e.key === 'Backspace' && !labelInput.value && pendingLabels.length) {
+        renderLabelChips(pendingLabels.slice(0, -1));
+      }
+    });
+    labelInput.addEventListener('blur', commitPendingLabelInput);
+  }
 
   function allLabels() {
-    return Array.from(new Set(
-      Object.values(state.subEnquiries).map((s) => s.label).filter(Boolean)
-    )).sort((a, b) => a.localeCompare(b));
+    const set = new Set();
+    Object.values(state.subEnquiries).forEach((s) => subLabels(s).forEach((l) => { if (l) set.add(l); }));
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
   }
 
   function refreshLabelDatalist() {
@@ -1613,17 +1723,131 @@
     }
   }
 
-  function htmlAnchorsToPlainText(html) {
+  // ---------- Template editor: hyperlinks stay live ----------
+  // draft-template-input is a contenteditable div (not a textarea) so
+  // that a pasted hyperlink — or one added with "Insert link" — can
+  // render as real, clickable link text ("cpf.gov.sg") rather than the
+  // old bracketed "cpf.gov.sg (www.cpf.gov.sg)" form. The full URL
+  // never disappears: it's read straight off each <a href> at Save
+  // time into sub.templateLinks, which is what Deep thinking search's
+  // "All hyperlinks" list and the import/export LINKS: lines use.
+
+  function escapeRegExp(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  // Turns stored plain text + a links list back into editor HTML,
+  // wrapping every occurrence of each link's display text in a real
+  // <a>. Longest texts are matched first so one link's text can't
+  // eat into a longer, overlapping one.
+  function templateSegmentsFor(text, links) {
+    if (!links || links.length === 0) return [{ type: 'text', value: text }];
+    const textToUrl = new Map();
+    links.forEach((l) => { if (l.text && !textToUrl.has(l.text)) textToUrl.set(l.text, l.url); });
+    const uniqueTexts = Array.from(textToUrl.keys()).sort((a, b) => b.length - a.length);
+    if (uniqueTexts.length === 0) return [{ type: 'text', value: text }];
+    const pattern = new RegExp(uniqueTexts.map(escapeRegExp).join('|'), 'g');
+    const segments = [];
+    let lastIndex = 0;
+    let m;
+    while ((m = pattern.exec(text))) {
+      if (m.index > lastIndex) segments.push({ type: 'text', value: text.slice(lastIndex, m.index) });
+      segments.push({ type: 'link', text: m[0], url: textToUrl.get(m[0]) });
+      lastIndex = m.index + m[0].length;
+    }
+    if (lastIndex < text.length) segments.push({ type: 'text', value: text.slice(lastIndex) });
+    return segments;
+  }
+
+  function templateToHtml(sub) {
+    const segments = templateSegmentsFor(sub.template || '', subLinks(sub));
+    return segments.map((seg) => seg.type === 'link'
+      ? '<a href="' + escapeHtmlLocal(seg.url) + '" target="_blank" rel="noopener">' + escapeHtmlLocal(seg.text) + '</a>'
+      : escapeHtmlLocal(seg.value).replace(/\n/g, '<br>')
+    ).join('');
+  }
+
+  function renderTemplateIntoEditor(sub) {
+    templateInput.innerHTML = sub.template ? templateToHtml(sub) : '';
+  }
+
+  // Editor -> plain text, preserving line breaks the same way the
+  // rest of the app already does (br -> \n, block-level -> \n).
+  function editorPlainText() {
+    const clone = templateInput.cloneNode(true);
+    Array.from(clone.querySelectorAll('br')).forEach((br) => br.replaceWith('\n'));
+    Array.from(clone.querySelectorAll('div, p')).forEach((el) => el.insertAdjacentText('afterend', '\n'));
+    return (clone.textContent || '')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/^\n+|\n+$/g, '');
+  }
+
+  // Editor -> the hyperlinks currently live inside it, in document
+  // order, deduped by (text, url) pair.
+  function editorLinks() {
+    const seen = new Set();
+    const links = [];
+    Array.from(templateInput.querySelectorAll('a[href]')).forEach((a) => {
+      const text = (a.textContent || '').trim();
+      const url = (a.getAttribute('href') || '').trim();
+      if (!text || !url) return;
+      const key = text + '\u0001' + url;
+      if (seen.has(key)) return;
+      seen.add(key);
+      links.push({ text, url });
+    });
+    return links;
+  }
+
+  function insertNodeAtCursor(node) {
+    templateInput.focus();
+    const sel = window.getSelection();
+    let range;
+    if (sel && sel.rangeCount && templateInput.contains(sel.anchorNode)) {
+      range = sel.getRangeAt(0);
+      range.deleteContents();
+    } else {
+      range = document.createRange();
+      range.selectNodeContents(templateInput);
+      range.collapse(false);
+    }
+    // A DocumentFragment empties itself into the document the moment
+    // it's inserted, so `node` itself is unusable as a cursor anchor
+    // afterwards — grab its last child first and anchor on that
+    // instead. A plain element (e.g. the Insert Link <a>) stays valid.
+    const isFragment = node.nodeType === 11;
+    const anchor = isFragment ? node.lastChild : node;
+    range.insertNode(node);
+    if (anchor && anchor.parentNode) {
+      range.setStartAfter(anchor);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }
+
+  // Sanitizes pasted HTML down to just text + <a href> + <br>,
+  // reusing the same Word paste-artifact cleanup as everywhere else
+  // in the app, but — unlike the old htmlAnchorsToPlainText — keeps
+  // anchors as real elements instead of collapsing them to bracketed
+  // text, so the pasted hyperlink stays genuinely clickable.
+  function htmlToTemplateFragment(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     normalizeWordPasteArtifacts(doc.body);
     collapseInsignificantWhitespace(doc.body);
+
     Array.from(doc.body.querySelectorAll('a[href]')).forEach((a) => {
       const href = (a.getAttribute('href') || '').trim();
-      if (!href) return;
       const label = a.textContent.trim();
-      const display = (label && label !== href) ? (label + ' (' + href + ')') : href;
-      a.replaceWith(document.createTextNode(display));
+      if (!href || !label) { a.replaceWith(document.createTextNode(label)); return; }
+      const clean = document.createElement('a');
+      clean.setAttribute('href', href);
+      clean.setAttribute('target', '_blank');
+      clean.setAttribute('rel', 'noopener');
+      clean.textContent = label;
+      a.replaceWith(clean);
     });
+
     Array.from(doc.body.querySelectorAll('li')).forEach((li) => {
       const ordered = li.parentElement && li.parentElement.tagName === 'OL';
       let marker = '\u2022 ';
@@ -1633,58 +1857,55 @@
       }
       li.insertBefore(document.createTextNode(marker), li.firstChild);
     });
-    Array.from(doc.body.querySelectorAll('br')).forEach((br) => br.replaceWith('\n'));
+
     const blockSelector = 'p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote';
     Array.from(doc.body.querySelectorAll(blockSelector)).forEach((el) => {
-      el.insertAdjacentText('afterend', '\n');
+      el.insertAdjacentHTML('afterend', '<br>');
     });
-    return (doc.body.textContent || '')
-      .replace(/ {2,}/g, ' ')
-      .replace(/ *\n */g, '\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .replace(/^\n+|\n+$/g, '')
-      .trim();
-  }
 
-  function insertAtCursor(textarea, text) {
-    const start = textarea.selectionStart == null ? textarea.value.length : textarea.selectionStart;
-    const end = textarea.selectionEnd == null ? textarea.value.length : textarea.selectionEnd;
-    const before = textarea.value.slice(0, start);
-    const after = textarea.value.slice(end);
-    textarea.value = before + text + after;
-    const caret = start + text.length;
-    textarea.setSelectionRange(caret, caret);
+    // Unwrap everything that isn't A or BR, keeping their contents
+    // (which may include real anchors) in place.
+    (function unwrap(node) {
+      Array.from(node.children).forEach((child) => {
+        unwrap(child);
+        if (child.tagName !== 'A' && child.tagName !== 'BR') {
+          while (child.firstChild) child.parentNode.insertBefore(child.firstChild, child);
+          child.remove();
+        }
+      });
+    }(doc.body));
+
+    const frag = document.createDocumentFragment();
+    Array.from(doc.body.childNodes).forEach((n) => frag.appendChild(n.cloneNode(true)));
+    return frag;
   }
 
   templateInput.addEventListener('paste', (e) => {
     const cd = e.clipboardData || window.clipboardData;
     if (!cd) return;
     const html = cd.getData('text/html');
-    // Only bail to the default plain-text paste when there's no rich
-    // markup to worry about at all. We used to only intervene when a
-    // link was present, but Word/Outlook line-wrap and list artifacts
-    // (see normalizeWordPasteArtifacts above) need the same cleanup
-    // even when nothing in the paste is a hyperlink.
-    if (!html) return;
+    if (!html) return; // fall through to default plain-text paste
     e.preventDefault();
-    const text = htmlAnchorsToPlainText(html);
-    let inserted = false;
-    try { inserted = document.execCommand && document.execCommand('insertText', false, text); } catch (err) { inserted = false; }
-    if (!inserted) insertAtCursor(templateInput, text);
+    const frag = htmlToTemplateFragment(html);
+    insertNodeAtCursor(frag);
   });
 
   if (templateLinkBtn) {
     templateLinkBtn.addEventListener('click', () => {
+      const sel = window.getSelection();
+      const selectedText = (sel && sel.rangeCount && templateInput.contains(sel.anchorNode))
+        ? sel.toString() : '';
       const url = window.prompt('Link URL:');
       if (!url || !url.trim()) return;
-      const label = window.prompt('Link text (leave blank to show the URL itself):', '');
+      const label = window.prompt('Link text (leave blank to show the URL itself):', selectedText || '');
       const trimmedUrl = url.trim();
-      const trimmedLabel = (label || '').trim();
-      const display = (trimmedLabel && trimmedLabel !== trimmedUrl)
-        ? (trimmedLabel + ' (' + trimmedUrl + ')')
-        : trimmedUrl;
-      templateInput.focus();
-      insertAtCursor(templateInput, display);
+      const trimmedLabel = (label || '').trim() || trimmedUrl;
+      const a = document.createElement('a');
+      a.setAttribute('href', trimmedUrl);
+      a.setAttribute('target', '_blank');
+      a.setAttribute('rel', 'noopener');
+      a.textContent = trimmedLabel;
+      insertNodeAtCursor(a);
     });
   }
 
@@ -1692,14 +1913,17 @@
     const subId = state.selectedSubEnquiryId;
     if (!subId) return;
     const sub = state.subEnquiries[subId];
-    sub.template = templateInput.value;
-    sub.label = (labelInput.value || '').trim();
+    sub.template = editorPlainText();
+    sub.templateLinks = editorLinks();
+    commitPendingLabelInput();
+    sub.labels = pendingLabels.slice();
     templateStatus.textContent = 'Saved \u2014 linked to ' + sub.name +
-      (sub.label ? ' \u2014 labelled "' + sub.label + '".' : '.');
+      (sub.labels.length ? ' \u2014 tagged ' + sub.labels.map((l) => '#' + l).join(' ') + '.' : '.');
     templateStatus.classList.add('is-saved');
     renderTree(); // badge counts etc. stay in sync
     refreshLabelDatalist();
     refreshFindLabelSelect();
+    buildDeepIndex(); // keeps "All hyperlinks" and the keyword index in sync
     showToast('Template saved for ' + sub.name);
   });
 
@@ -1710,9 +1934,11 @@
     if (!sub.template) return;
     if (!window.confirm('Remove the template attached to "' + sub.name + '"?')) return;
     sub.template = '';
-    templateInput.value = '';
+    sub.templateLinks = [];
+    templateInput.innerHTML = '';
     templateStatus.textContent = 'No template attached yet.';
     templateStatus.classList.remove('is-saved');
+    buildDeepIndex();
     showToast('Template removed from ' + sub.name);
   });
 
@@ -1860,11 +2086,11 @@
       if (filters.enquiryId && (!enq || enq.id !== filters.enquiryId)) return;
       if (filters.categoryId && (!cat || cat.id !== filters.categoryId)) return;
       if (filters.schemeId && (!scheme || scheme.id !== filters.schemeId)) return;
-      if (filters.label && sub.label !== filters.label) return;
+      if (filters.label && !subLabels(sub).includes(filters.label)) return;
 
       if (q) {
         const haystack = [scheme && scheme.name, cat && cat.name, enq && enq.name, sub.name,
-          sub.keywords.join(' '), sub.label, sub.template].filter(Boolean).join(' \u2022 ').toLowerCase();
+          sub.keywords.join(' '), subLabels(sub).join(' '), sub.template].filter(Boolean).join(' \u2022 ').toLowerCase();
         if (!haystack.includes(q)) return;
       }
 
@@ -2078,11 +2304,17 @@
   findViewMoreBtn.addEventListener('click', openViewMore);
 
   function makeLabelBadge(sub) {
-    if (!sub.label) return null;
-    const badge = document.createElement('span');
-    badge.className = 'draft-result__label';
-    badge.textContent = sub.label;
-    return badge;
+    const labels = subLabels(sub);
+    if (!labels.length) return null;
+    const wrap = document.createElement('div');
+    wrap.className = 'draft-result__labels';
+    labels.forEach((tag) => {
+      const badge = document.createElement('span');
+      badge.className = 'draft-result__label';
+      badge.textContent = tag;
+      wrap.appendChild(badge);
+    });
+    return wrap;
   }
 
   function renderResultCard(sub, q, onChange) {
@@ -2415,6 +2647,56 @@
       ? 'No templates to index yet \u2014 attach a template to a Sub-Enquiry in the Tag view first.'
       : 'Indexed ' + deepIndex.length + ' template' + (deepIndex.length === 1 ? '' : 's') + ' \u2022 ' + totalKeywords + ' keyword' + (totalKeywords === 1 ? '' : 's') + ' total.';
     renderDeepResults();
+    renderDeepLinksList();
+  }
+
+  // Every hyperlink stored on every Sub-Enquiry's template, with its
+  // display text, the full URL, and which Sub-Enquiry it lives on —
+  // rebuilt any time a template is saved/cleared or the index is
+  // manually rebuilt, so it never drifts from what's actually stored.
+  function renderDeepLinksList() {
+    if (!deepLinksListEl) return;
+    const rows = [];
+    Object.values(state.subEnquiries).forEach((sub) => {
+      subLinks(sub).forEach((link) => rows.push({ sub, link }));
+    });
+    rows.sort((a, b) => pathForSubEnquiry(a.sub.id).localeCompare(pathForSubEnquiry(b.sub.id)) ||
+      a.link.text.localeCompare(b.link.text));
+
+    if (deepLinksCountEl) {
+      deepLinksCountEl.textContent = rows.length === 0 ? '' :
+        (rows.length === 1 ? '1 hyperlink' : rows.length + ' hyperlinks');
+    }
+
+    deepLinksListEl.innerHTML = '';
+    if (rows.length === 0) {
+      deepLinksListEl.appendChild(deepLinksEmptyNote);
+      return;
+    }
+    rows.forEach(({ sub, link }) => {
+      const row = document.createElement('div');
+      row.className = 'draft-link-row';
+
+      const textEl = document.createElement('span');
+      textEl.className = 'draft-link-row__text';
+      textEl.textContent = link.text;
+      row.appendChild(textEl);
+
+      const urlEl = document.createElement('a');
+      urlEl.className = 'draft-link-row__url';
+      urlEl.href = link.url;
+      urlEl.target = '_blank';
+      urlEl.rel = 'noopener';
+      urlEl.textContent = link.url;
+      row.appendChild(urlEl);
+
+      const sourceEl = document.createElement('span');
+      sourceEl.className = 'draft-link-row__source';
+      sourceEl.textContent = pathForSubEnquiry(sub.id);
+      row.appendChild(sourceEl);
+
+      deepLinksListEl.appendChild(row);
+    });
   }
 
   function computeDeepMatches(queryKeywords) {
@@ -2570,25 +2852,36 @@
   // ---------- Entry format ----------
   // PATH: Scheme > Category > Enquiry > Sub-Enquiry
   // KEYWORDS: kw1, kw2
-  // LABEL: person's name or term
+  // LABEL: tag1, tag2
+  // LINKS:
+  // <link display text> => <full URL>
   // TEMPLATE:
-  // <template text, verbatim>
+  // <template text, verbatim — link display text appears inline here,
+  //  the LINKS: block above is what maps it back to a full URL>
   // ###END###
   //
   // Plain ASCII '>' in PATH (distinct from the '\u203A' used for display
-  // elsewhere) so import can split on it reliably. LABEL is optional on
-  // import for backward compatibility with exports made before Template
-  // Labellers existed — a block without a LABEL: line leaves any
-  // existing label on that Sub-Enquiry untouched rather than blanking it.
+  // elsewhere) so import can split on it reliably. LABEL and LINKS are
+  // each optional on import for backward compatibility with older
+  // exports — a block missing either line leaves the existing value on
+  // that Sub-Enquiry untouched rather than blanking it. LABEL is
+  // comma-separated so it can carry any number of Name/Term tags.
+  // LINKS sits before TEMPLATE (not after) because TEMPLATE's own
+  // regex reads everything to the end of the block, verbatim.
 
   function entryBlock(sub) {
     const enq = state.enquiries[sub.enquiryId];
     const cat = enq ? state.categories[enq.categoryId] : null;
     const scheme = cat ? state.schemes[cat.schemeId] : null;
     const path = [scheme && scheme.name, cat && cat.name, enq && enq.name, sub.name].filter(Boolean).join(' > ');
+    const links = subLinks(sub);
+    const linksBlock = links.length
+      ? 'LINKS:\n' + links.map((l) => l.text + ' => ' + l.url).join('\n') + '\n'
+      : '';
     return 'PATH: ' + path + '\n' +
       'KEYWORDS: ' + sub.keywords.join(', ') + '\n' +
-      'LABEL: ' + (sub.label || '') + '\n' +
+      'LABEL: ' + subLabels(sub).join(', ') + '\n' +
+      linksBlock +
       'TEMPLATE:\n' + sub.template + '\n' +
       '###END###';
   }
@@ -2668,9 +2961,11 @@
     if (!entries) return;
     if (!window.htmlDocx) { showToast('Document exporter not loaded.'); return; }
     const body = entries.map((sub) => {
+      const labels = subLabels(sub);
       return '<h2>' + escapeHtmlLocal(pathForSubEnquiry(sub.id)) + '</h2>' +
         (sub.keywords.length ? '<p><em>Keywords: ' + escapeHtmlLocal(sub.keywords.join(', ')) + '</em></p>' : '') +
-        '<p>' + escapeHtmlLocal(sub.template) + '</p>';
+        (labels.length ? '<p><em>Tags: ' + escapeHtmlLocal(labels.map((l) => '#' + l).join(' ')) + '</em></p>' : '') +
+        '<p>' + templateToHtml(sub) + '</p>';
     }).join('');
     downloadTextBlob(window.htmlDocx.asBlob(draftHtmlDocument(body)), 'draft-templates-' + draftTimestamp() + '.docx');
   });
@@ -2817,15 +3112,25 @@
     const pathMatch = block.match(/^PATH:\s*(.+)$/m);
     const keywordsMatch = block.match(/^KEYWORDS:\s*(.*)$/m);
     const labelMatch = block.match(/^LABEL:\s*(.*)$/m);
+    const linksMatch = block.match(/^LINKS:\n([\s\S]*?)(?=^TEMPLATE:)/m);
     const templateMatch = block.match(/^TEMPLATE:\n([\s\S]*)$/m);
     if (!pathMatch || !templateMatch) return null;
     const segments = pathMatch[1].split('>').map((s) => s.trim()).filter(Boolean);
     if (segments.length !== 4) return null;
     const keywords = keywordsMatch ? keywordsMatch[1].split(',').map((k) => k.trim()).filter(Boolean) : [];
-    // null (no LABEL: line at all) vs '' (LABEL: present but empty) are
-    // kept distinct so import can tell "not specified" from "cleared".
+    // null (no LABEL:/LINKS: line at all) vs '' / absent-block ("line
+    // present but empty") are kept distinct so import can tell
+    // "not specified" (leave existing value alone) from "cleared".
     const label = labelMatch ? labelMatch[1].trim() : null;
-    return { path: segments, keywords, label, template: templateMatch[1].replace(/\n$/, '') };
+    const labels = label === null ? null : (label ? label.split(',').map((s) => s.trim()).filter(Boolean) : []);
+    const links = linksMatch
+      ? linksMatch[1].split('\n').map((l) => l.trim()).filter(Boolean).map((line) => {
+          const idx = line.indexOf('=>');
+          if (idx === -1) return null;
+          return { text: line.slice(0, idx).trim(), url: line.slice(idx + 2).trim() };
+        }).filter(Boolean)
+      : null;
+    return { path: segments, keywords, labels, links, template: templateMatch[1].replace(/\n$/, '') };
   }
 
   function importEntryText(text) {
@@ -2844,7 +3149,8 @@
       const sub = state.subEnquiries[subId];
       sub.keywords = entry.keywords;
       sub.template = entry.template;
-      if (entry.label !== null) sub.label = entry.label;
+      if (entry.labels !== null) sub.labels = entry.labels;
+      if (entry.links !== null) sub.templateLinks = entry.links;
       if (existed) updated += 1; else created += 1;
     });
     refreshLabelDatalist();
@@ -3449,7 +3755,8 @@
         enquiryId: source.enquiryId,
         keywords: (source.keywords || []).slice(),
         template: source.template || '',
-        label: source.label || ''
+        labels: subLabels(source).slice(),
+        templateLinks: subLinks(source).map((l) => ({ text: l.text, url: l.url }))
       };
       enq.subEnquiryIds.push(newId);
       const sourceIndex = enq.subEnquiryIds.indexOf(id);
