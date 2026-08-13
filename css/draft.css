@@ -243,6 +243,15 @@
   cursor: pointer;
 }
 
+/* Belt-and-braces: the editor is meant to be flat text + <a> + <br> only
+   (see htmlToTemplateFragment in draft.js). If a <div>/<p> ever ends up
+   in there anyway, strip the browser's default block margin so it can't
+   render as an extra gap between lines. */
+.draft-textarea--template p,
+.draft-textarea--template div {
+  margin: 0;
+}
+
 /* ---------- Name/Term multi-hashtag input ---------- */
 
 .draft-tag-input {
