@@ -310,7 +310,7 @@
 .draft-link-row {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   padding: 8px 10px;
   border: 1px solid var(--gray-line);
   border-radius: 8px;
@@ -318,10 +318,28 @@
   margin-bottom: 8px;
 }
 
+.draft-link-row__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .draft-link-row__text {
   font-weight: 600;
   color: var(--ink);
   font-size: 13px;
+}
+
+.draft-link-row__count {
+  flex-shrink: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--bronze-deep);
+  background: var(--bronze-soft);
+  border-radius: 999px;
+  padding: 2px 8px;
 }
 
 .draft-link-row__url {
@@ -331,9 +349,21 @@
   word-break: break-all;
 }
 
+.draft-link-row__sources {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
 .draft-link-row__source {
   font-size: 11px;
   color: var(--gray);
+}
+
+.draft-link-row__source:not(:last-child)::after {
+  content: "\2022";
+  margin: 0 8px;
+  color: var(--gray-line);
 }
 
 .draft-input {
