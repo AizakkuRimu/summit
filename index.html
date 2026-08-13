@@ -538,12 +538,14 @@
               <h3 class="draft-col__subtitle">Keywords filed here</h3>
               <div class="draft-keywords draft-keywords--filed" id="draft-detail-keywords"></div>
 
-              <label class="draft-field-label" for="draft-label-input">Name/Term <span>(a hashtag-style tag to sort templates by — independent of the hierarchy above)</span></label>
-              <input type="text" class="draft-search-input" id="draft-label-input" list="draft-label-datalist" placeholder="e.g. a person's name, or a recurring term…" autocomplete="off">
+              <label class="draft-field-label" for="draft-label-input">Name/Term <span>(hashtag-style tags to sort templates by — add as many as you like, independent of the hierarchy above)</span></label>
+              <div class="draft-tag-input" id="draft-label-tags">
+                <input type="text" class="draft-tag-input__field" id="draft-label-input" list="draft-label-datalist" placeholder="Type a tag, press Enter…" autocomplete="off">
+              </div>
               <datalist id="draft-label-datalist"></datalist>
 
               <h3 class="draft-col__subtitle">Template</h3>
-              <textarea id="draft-template-input" class="draft-textarea draft-textarea--template" placeholder="Paste or type the template text to attach to this Sub-Enquiry…" aria-label="Template text for this Sub-Enquiry"></textarea>
+              <div id="draft-template-input" class="draft-textarea draft-textarea--template" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Template text for this Sub-Enquiry" data-placeholder="Paste or type the template text to attach to this Sub-Enquiry… (pasted hyperlinks stay clickable)"></div>
               <div class="draft-col__actions">
                 <button type="button" class="summit-btn summit-btn--primary" id="draft-template-save-btn">Save template</button>
                 <button type="button" class="summit-btn" id="draft-template-clear-btn">Clear template</button>
@@ -646,6 +648,15 @@
               </div>
               <div class="draft-find-results" id="draft-deep-results">
                 <p class="draft-empty-note" id="draft-deep-empty">Type a search above to query the template keyword index.</p>
+              </div>
+
+              <div class="draft-col__subhead">
+                <h3 class="draft-col__subtitle">All hyperlinks</h3>
+                <span class="draft-find-count" id="draft-deep-links-count"></span>
+              </div>
+              <p class="draft-search-help">Every hyperlink stored across every template — the display text and the full link it opens, wherever it's used.</p>
+              <div class="draft-find-results" id="draft-deep-links-list">
+                <p class="draft-empty-note" id="draft-deep-links-empty">No hyperlinks stored yet — use "Insert link" in a template, or paste hyperlinked text into one.</p>
               </div>
             </div>
 
