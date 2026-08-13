@@ -3623,6 +3623,36 @@
     });
   }
 
+  // Rich copy for a single hyperlink entry: puts both text/html (a
+  // real clickable <a>) and a plain-text fallback ("text (url)") on
+  // the clipboard, mirroring copyTemplateRich's approach below.
+  async function copyLinkRich(text, url) {
+    const plain = text + ' (' + url + ')';
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+      try {
+        const html = '<a href="' + escapeHtmlLocal(url) + '">' + escapeHtmlLocal(text) + '</a>';
+        const item = new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([plain], { type: 'text/plain' })
+        });
+        await navigator.clipboard.write([item]);
+        return true;
+      } catch (err) {
+        // fall through to plain-text copy below
+      }
+    }
+    await navigator.clipboard.writeText(plain);
+    return false;
+  }
+
+  // Runtime-only: which groups have their Sub-Enquiry source chain
+  // expanded. Collapsed by default — the list is meant to be a quick
+  // scan of link name + URL, not buried under every location it's
+  // filed under. Keyed by the group's normalized text/url so it stays
+  // stable across re-renders (a plain array index would drift as
+  // links are added/removed elsewhere).
+  const expandedLinkSources = new Set();
+
   function renderDeepLinksList() {
     if (!deepLinksListEl) return;
     const rows = [];
@@ -3649,6 +3679,7 @@
       return;
     }
     groups.forEach((group) => {
+      const groupKey = normalizeLinkText(group.text) + '::' + normalizeLinkUrl(group.url);
       const row = document.createElement('div');
       row.className = 'draft-link-row';
 
@@ -3676,15 +3707,48 @@
       urlEl.textContent = group.url;
       row.appendChild(urlEl);
 
-      const sourcesWrap = document.createElement('div');
-      sourcesWrap.className = 'draft-link-row__sources';
-      group.sources.forEach(({ path }) => {
-        const sourceEl = document.createElement('span');
-        sourceEl.className = 'draft-link-row__source';
-        sourceEl.textContent = path;
-        sourcesWrap.appendChild(sourceEl);
+      const actions = document.createElement('div');
+      actions.className = 'draft-link-row__actions';
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'summit-btn draft-link-row__copy';
+      copyBtn.textContent = 'Copy';
+      copyBtn.addEventListener('click', async () => {
+        try {
+          const rich = await copyLinkRich(group.text, group.url);
+          showToast(rich ? 'Link copied to clipboard (stays clickable).' : 'Link copied to clipboard.');
+        } catch (err) {
+          showToast('Could not copy \u2014 select and copy manually.');
+        }
       });
-      row.appendChild(sourcesWrap);
+      actions.appendChild(copyBtn);
+
+      const expanded = expandedLinkSources.has(groupKey);
+      const sourcesToggle = document.createElement('button');
+      sourcesToggle.type = 'button';
+      sourcesToggle.className = 'draft-result__toggle draft-link-row__sources-toggle';
+      sourcesToggle.textContent = (expanded ? 'Hide' : 'Show') + ' ' + group.sources.length +
+        ' Sub-Enquir' + (group.sources.length === 1 ? 'y' : 'ies');
+      sourcesToggle.addEventListener('click', () => {
+        if (expanded) expandedLinkSources.delete(groupKey); else expandedLinkSources.add(groupKey);
+        renderDeepLinksList();
+      });
+      actions.appendChild(sourcesToggle);
+
+      row.appendChild(actions);
+
+      if (expanded) {
+        const sourcesWrap = document.createElement('div');
+        sourcesWrap.className = 'draft-link-row__sources';
+        group.sources.forEach(({ path }) => {
+          const sourceEl = document.createElement('span');
+          sourceEl.className = 'draft-link-row__source';
+          sourceEl.textContent = path;
+          sourcesWrap.appendChild(sourceEl);
+        });
+        row.appendChild(sourcesWrap);
+      }
 
       deepLinksListEl.appendChild(row);
     });
