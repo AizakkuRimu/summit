@@ -895,6 +895,47 @@
   margin: 0;
 }
 
+/* Lighter variant of .draft-col__subhead — same subtitle + trailing
+   control layout, but no top divider, for a "Remove all" link sitting
+   right next to a subtitle already mid-panel (Keywords filed here /
+   Keywords for this template). */
+.draft-col__subtitle-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 16px 0 8px;
+}
+
+.draft-col__subtitle-row .draft-col__subtitle {
+  margin: 0;
+}
+
+.draft-remove-all-btn {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: #a3392a;
+  background: none;
+  border: none;
+  padding: 0;
+  height: auto;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.draft-remove-all-btn:hover {
+  text-decoration: underline;
+  color: #7c2a1f;
+}
+
+.draft-remove-all-btn:disabled {
+  color: var(--gray);
+  cursor: default;
+  text-decoration: none;
+  opacity: 0.6;
+}
+
 .draft-field-label {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 10.5px;
@@ -1199,6 +1240,17 @@
 
 .draft-hierarchy-io__panel {
   max-width: 480px;
+}
+
+.draft-quicktpl__panel {
+  max-width: 560px;
+}
+
+.draft-quicktpl__panel .draft-textarea {
+  min-height: 220px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12.5px;
+  margin-top: 4px;
 }
 
 .draft-viewmore__panel {
