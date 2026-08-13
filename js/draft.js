@@ -1752,39 +1752,18 @@
   }
 
   // Runs after every block has been unwrapped down to flat text/<a>/<br>
-  // content. Word paste HTML frequently represents its own paragraph
-  // spacing as an actual blank paragraph (an empty <p>), which by this
-  // point has become two adjacent <br>s (one from the blank block, one
-  // from the block right after it). Collapse any run of consecutive
-  // <br>s to a single one so the template box always uses Summit's own
-  // one-line spacing rather than whatever blank-line spacing the source
-  // document happened to use, and drop a lone leading/trailing <br> so
-  // pasted content doesn't start or end on a blank line either.
-  function collapseConsecutiveBreaks(root) {
-    const isBr = (n) => n && n.nodeType === 1 && n.tagName === 'BR';
-    const isBlankText = (n) => n && n.nodeType === 3 && n.nodeValue.trim() === '';
-    let child = root.firstChild;
-    while (child) {
-      const next = child.nextSibling;
-      if (isBr(child)) {
-        let probe = next;
-        while (isBlankText(probe)) probe = probe.nextSibling;
-        if (isBr(probe)) {
-          let toRemove = next;
-          while (toRemove && toRemove !== probe) {
-            const after = toRemove.nextSibling;
-            toRemove.remove();
-            toRemove = after;
-          }
-          child.remove();
-          child = probe;
-          continue;
-        }
-      }
-      child = next;
-    }
-    if (isBr(root.firstChild)) root.firstChild.remove();
-    if (isBr(root.lastChild)) root.lastChild.remove();
+  // content. Trimming/normalizing earlier can leave behind zero-length
+  // text nodes (e.g. a blank-line paragraph whose only content was
+  // whitespace, once that whitespace is trimmed away). An empty node
+  // sitting between a <br> and the next real text would otherwise hide
+  // that text from the "am I right after a line break" check below, so
+  // clear those out first — the <br>s themselves are left exactly as
+  // they were, one per source paragraph break, so a blank line in the
+  // pasted source stays a blank line here.
+  function removeEmptyTextNodes(root) {
+    Array.from(root.childNodes).forEach((n) => {
+      if (n.nodeType === 3 && n.nodeValue === '') n.remove();
+    });
   }
 
   // Trims the space that's still left sitting right at a line boundary
@@ -1957,7 +1936,7 @@
       });
     }(doc.body));
 
-    collapseConsecutiveBreaks(doc.body);
+    removeEmptyTextNodes(doc.body);
     trimAroundBreaksFlat(doc.body);
 
     const frag = document.createDocumentFragment();
