@@ -890,6 +890,15 @@
   padding: 0 1px;
 }
 
+.draft-result__snippet a {
+  color: var(--bronze-deep);
+  text-decoration: underline;
+}
+
+.draft-result__snippet a mark {
+  text-decoration: underline;
+}
+
 .draft-result__actions {
   display: flex;
   align-items: center;
