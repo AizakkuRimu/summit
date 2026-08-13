@@ -1751,6 +1751,59 @@
     });
   }
 
+  // Runs after every block has been unwrapped down to flat text/<a>/<br>
+  // content. Word paste HTML frequently represents its own paragraph
+  // spacing as an actual blank paragraph (an empty <p>), which by this
+  // point has become two adjacent <br>s (one from the blank block, one
+  // from the block right after it). Collapse any run of consecutive
+  // <br>s to a single one so the template box always uses Summit's own
+  // one-line spacing rather than whatever blank-line spacing the source
+  // document happened to use, and drop a lone leading/trailing <br> so
+  // pasted content doesn't start or end on a blank line either.
+  function collapseConsecutiveBreaks(root) {
+    const isBr = (n) => n && n.nodeType === 1 && n.tagName === 'BR';
+    const isBlankText = (n) => n && n.nodeType === 3 && n.nodeValue.trim() === '';
+    let child = root.firstChild;
+    while (child) {
+      const next = child.nextSibling;
+      if (isBr(child)) {
+        let probe = next;
+        while (isBlankText(probe)) probe = probe.nextSibling;
+        if (isBr(probe)) {
+          let toRemove = next;
+          while (toRemove && toRemove !== probe) {
+            const after = toRemove.nextSibling;
+            toRemove.remove();
+            toRemove = after;
+          }
+          child.remove();
+          child = probe;
+          continue;
+        }
+      }
+      child = next;
+    }
+    if (isBr(root.firstChild)) root.firstChild.remove();
+    if (isBr(root.lastChild)) root.lastChild.remove();
+  }
+
+  // Trims the space that's still left sitting right at a line boundary
+  // once the content is flat — the first word after any <br> (not just
+  // after a whole paragraph) and the last word right before one.
+  function trimAroundBreaksFlat(root) {
+    Array.from(root.childNodes).forEach((node) => {
+      if (node.nodeType !== 3) return;
+      const prev = node.previousSibling;
+      const next = node.nextSibling;
+      if (!prev || (prev.nodeType === 1 && prev.tagName === 'BR')) {
+        node.nodeValue = node.nodeValue.replace(/^ +/, '');
+      }
+      if (!next || (next.nodeType === 1 && next.tagName === 'BR')) {
+        node.nodeValue = node.nodeValue.replace(/ +$/, '');
+      }
+    });
+  }
+
   // ---------- Template editor: hyperlinks stay live ----------
   // draft-template-input is a contenteditable div (not a textarea) so
   // that a pasted hyperlink — or one added with "Insert link" — can
@@ -1904,6 +1957,9 @@
       });
     }(doc.body));
 
+    collapseConsecutiveBreaks(doc.body);
+    trimAroundBreaksFlat(doc.body);
+
     const frag = document.createDocumentFragment();
     Array.from(doc.body.childNodes).forEach((n) => frag.appendChild(n.cloneNode(true)));
     return frag;
@@ -1917,6 +1973,21 @@
     e.preventDefault();
     const frag = htmlToTemplateFragment(html);
     insertNodeAtCursor(frag);
+  });
+
+  // The rest of the editor treats content as flat text + <a> + <br> (see
+  // editorPlainText/editorLinks above and htmlToTemplateFragment). Left
+  // to the browser's own Enter handling, a new line can come in wrapped
+  // in a <div> or <p> instead — which one varies by browser — and that
+  // element carries its own default margin, so it renders with a taller
+  // gap than the single <br> lines from a paste use, and backspacing
+  // across the boundary between the two models behaves inconsistently.
+  // Inserting a plain <br> ourselves keeps every line, typed or pasted,
+  // on the same model.
+  templateInput.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    e.preventDefault();
+    insertNodeAtCursor(document.createElement('br'));
   });
 
   if (templateLinkBtn) {
