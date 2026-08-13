@@ -3556,6 +3556,73 @@
   // display text, the full URL, and which Sub-Enquiry it lives on —
   // rebuilt any time a template is saved/cleared or the index is
   // manually rebuilt, so it never drifts from what's actually stored.
+  //
+  // The same link (or the same display text pointing at slightly
+  // different URLs) tends to get pasted into many templates, so
+  // instead of one row per occurrence, occurrences are merged into
+  // groups: any two links sharing either a normalized URL or a
+  // normalized display text land in the same group (transitively —
+  // A can merge with C via a shared B even if A and C don't directly
+  // match each other).
+  function normalizeLinkText(t) {
+    return (t || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+  function normalizeLinkUrl(u) {
+    return (u || '').trim().toLowerCase().replace(/\/+$/, '');
+  }
+
+  function groupLinkRows(rows) {
+    const parent = rows.map((_, i) => i);
+    function find(i) {
+      while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
+      return i;
+    }
+    function union(a, b) {
+      const ra = find(a), rb = find(b);
+      if (ra !== rb) parent[ra] = rb;
+    }
+    const byUrl = new Map();
+    const byText = new Map();
+    rows.forEach((r, i) => {
+      const nu = normalizeLinkUrl(r.link.url);
+      const nt = normalizeLinkText(r.link.text);
+      if (nu) { if (byUrl.has(nu)) union(i, byUrl.get(nu)); else byUrl.set(nu, i); }
+      if (nt) { if (byText.has(nt)) union(i, byText.get(nt)); else byText.set(nt, i); }
+    });
+
+    const groupsByRoot = new Map();
+    rows.forEach((r, i) => {
+      const root = find(i);
+      if (!groupsByRoot.has(root)) groupsByRoot.set(root, []);
+      groupsByRoot.get(root).push(r);
+    });
+
+    // Within a group, the most common exact text/URL "wins" as the
+    // representative shown in the header (first-seen breaks ties, so
+    // it stays stable given `rows` is already sorted deterministically).
+    function pickMode(values) {
+      const counts = new Map();
+      let best = values[0], bestCount = 0;
+      values.forEach((v) => {
+        const c = (counts.get(v) || 0) + 1;
+        counts.set(v, c);
+        if (c > bestCount) { bestCount = c; best = v; }
+      });
+      return best;
+    }
+
+    return Array.from(groupsByRoot.values()).map((members) => {
+      const text = pickMode(members.map((m) => m.link.text));
+      const url = pickMode(members.map((m) => m.link.url));
+      const sourcesBySub = new Map();
+      members.forEach((m) => { sourcesBySub.set(m.sub.id, m.sub); });
+      const sources = Array.from(sourcesBySub.values())
+        .map((sub) => ({ sub, path: pathForSubEnquiry(sub.id) }))
+        .sort((a, b) => a.path.localeCompare(b.path));
+      return { text, url, count: members.length, sources };
+    });
+  }
+
   function renderDeepLinksList() {
     if (!deepLinksListEl) return;
     const rows = [];
@@ -3565,9 +3632,15 @@
     rows.sort((a, b) => pathForSubEnquiry(a.sub.id).localeCompare(pathForSubEnquiry(b.sub.id)) ||
       a.link.text.localeCompare(b.link.text));
 
+    const groups = groupLinkRows(rows);
+    groups.sort((a, b) => b.count - a.count || a.text.localeCompare(b.text));
+
     if (deepLinksCountEl) {
       deepLinksCountEl.textContent = rows.length === 0 ? '' :
-        (rows.length === 1 ? '1 hyperlink' : rows.length + ' hyperlinks');
+        (groups.length === rows.length
+          ? (rows.length === 1 ? '1 hyperlink' : rows.length + ' hyperlinks')
+          : rows.length + ' hyperlink' + (rows.length === 1 ? '' : 's') +
+            ' \u2014 ' + groups.length + ' unique after merging duplicates');
     }
 
     deepLinksListEl.innerHTML = '';
@@ -3575,27 +3648,43 @@
       deepLinksListEl.appendChild(deepLinksEmptyNote);
       return;
     }
-    rows.forEach(({ sub, link }) => {
+    groups.forEach((group) => {
       const row = document.createElement('div');
       row.className = 'draft-link-row';
 
+      const header = document.createElement('div');
+      header.className = 'draft-link-row__header';
+
       const textEl = document.createElement('span');
       textEl.className = 'draft-link-row__text';
-      textEl.textContent = link.text;
-      row.appendChild(textEl);
+      textEl.textContent = group.text;
+      header.appendChild(textEl);
+
+      if (group.count > 1) {
+        const countBadge = document.createElement('span');
+        countBadge.className = 'draft-link-row__count';
+        countBadge.textContent = group.count + ' duplicates merged';
+        header.appendChild(countBadge);
+      }
+      row.appendChild(header);
 
       const urlEl = document.createElement('a');
       urlEl.className = 'draft-link-row__url';
-      urlEl.href = link.url;
+      urlEl.href = group.url;
       urlEl.target = '_blank';
       urlEl.rel = 'noopener';
-      urlEl.textContent = link.url;
+      urlEl.textContent = group.url;
       row.appendChild(urlEl);
 
-      const sourceEl = document.createElement('span');
-      sourceEl.className = 'draft-link-row__source';
-      sourceEl.textContent = pathForSubEnquiry(sub.id);
-      row.appendChild(sourceEl);
+      const sourcesWrap = document.createElement('div');
+      sourcesWrap.className = 'draft-link-row__sources';
+      group.sources.forEach(({ path }) => {
+        const sourceEl = document.createElement('span');
+        sourceEl.className = 'draft-link-row__source';
+        sourceEl.textContent = path;
+        sourcesWrap.appendChild(sourceEl);
+      });
+      row.appendChild(sourcesWrap);
 
       deepLinksListEl.appendChild(row);
     });
