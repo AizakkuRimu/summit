@@ -1936,7 +1936,7 @@
           '<button type="button" class="summit-modal__close" data-quicktpl-close aria-label="Close">\u2715</button>' +
         '</div>' +
         '<p class="draft-name-helper__hint" id="draft-quicktpl-target"></p>' +
-        '<p class="draft-search-help">Paste the two-column block copied straight from your table \u2014 the member\u2019s enquiry, then a tab, then the reply. If the tab gets lost in the paste, this falls back to splitting at the 2nd \u201cDear\u201d.</p>' +
+        '<p class="draft-search-help">Paste the two-column block copied straight from your table \u2014 the member\u2019s enquiry, then a tab, then the reply. If the tab gets lost in the paste, this falls back to splitting at the 2nd \u201cDear\u201d. Bold, italics, underline and hyperlinks in the reply are kept when pasting from a table or Word.</p>' +
         '<textarea class="draft-textarea" id="draft-quicktpl-input" placeholder="Paste the raw enquiry + reply block here\u2026" aria-label="Raw enquiry and reply text to parse"></textarea>' +
         '<div class="summit-modal__actions">' +
           '<button type="button" class="summit-btn" data-quicktpl-close>Cancel</button>' +
@@ -1951,6 +1951,32 @@
     const applyBtn = modal.querySelector('#draft-quicktpl-apply-btn');
     const statusEl = modal.querySelector('#draft-quicktpl-status');
 
+    // Plain <textarea>s only ever receive the clipboard's text/plain
+    // representation, so a straight paste has already lost any bold/
+    // italic/underline/hyperlink formatting before applyQuickTemplate
+    // ever sees it. We don't switch this box to a contenteditable
+    // (it stays simple to type/select in), and instead just siphon
+    // the richer text/html representation off the same paste event
+    // into quickTplEl._lastHtml, leaving the textarea's own paste
+    // behaviour untouched. applyQuickTemplate uses that cached HTML
+    // (when present) to do the enquiry/reply split with formatting
+    // intact, and falls back to the plain-text-only split otherwise.
+    // A stray flag distinguishes the 'input' event a paste itself
+    // fires from a genuine subsequent edit, so nudging the cursor
+    // around with the arrow keys after pasting doesn't invalidate it,
+    // but actually changing the text does.
+    let justPastedHtml = false;
+    inputEl.addEventListener('paste', (e) => {
+      const cd = e.clipboardData || window.clipboardData;
+      const html = cd && cd.getData('text/html');
+      quickTplEl._lastHtml = html || '';
+      justPastedHtml = true;
+    });
+    inputEl.addEventListener('input', () => {
+      if (justPastedHtml) { justPastedHtml = false; return; }
+      quickTplEl._lastHtml = '';
+    });
+
     applyBtn.addEventListener('click', () => {
       const raw = inputEl.value;
       if (!raw || !raw.trim()) {
@@ -1958,11 +1984,12 @@
         statusEl.classList.remove('is-saved');
         return;
       }
-      const result = applyQuickTemplate(raw);
+      const result = applyQuickTemplate(raw, quickTplEl._lastHtml);
       statusEl.textContent = result.message;
       statusEl.classList.toggle('is-saved', result.ok);
       if (result.ok) {
         inputEl.value = '';
+        quickTplEl._lastHtml = '';
         showToast(result.message);
       }
     });
@@ -1976,6 +2003,7 @@
     quickTplEl._input = inputEl;
     quickTplEl._apply = applyBtn;
     quickTplEl._status = statusEl;
+    quickTplEl._lastHtml = '';
     return modal;
   }
 
@@ -1985,6 +2013,7 @@
     const sub = subId ? state.subEnquiries[subId] : null;
     modal._status.textContent = '';
     modal._status.classList.remove('is-saved');
+    modal._lastHtml = '';
     if (sub) {
       modal._target.textContent = 'Will fill the next available template on: ' + pathForSubEnquiry(subId);
       modal._apply.disabled = false;
@@ -2042,17 +2071,169 @@
     return { enquiryText: enquiryPart, templateText: replyPart };
   }
 
-  function applyQuickTemplate(raw) {
+  // Returns the innerHTML of the first two <td>/<th> cells of the
+  // first table row that has at least two of them, or null if the
+  // pasted HTML doesn't contain a table shaped like that. Checked
+  // separately from htmlToTemplateFragment because that function
+  // unwraps <table>/<tr>/<td> entirely with no separator between
+  // cells, so by the time it's run the column boundary that matters
+  // here is already gone.
+  function firstTwoTableCells(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const rows = Array.from(doc.querySelectorAll('table tr'));
+    for (const row of rows) {
+      const cells = Array.from(row.querySelectorAll('td, th'));
+      if (cells.length >= 2) return [cells[0].innerHTML, cells[1].innerHTML];
+    }
+    return null;
+  }
+
+  // Raw concatenated text of every text node under `root`, in
+  // document order, with no newline substitution for <br>/block
+  // boundaries — deliberately not plainTextFromElement's flattening,
+  // so a character index found in this string lines up exactly with
+  // what splitFragmentAtOffset below walks.
+  function flattenRawText(root) {
+    let text = '';
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) text += node.nodeValue;
+    return text;
+  }
+
+  function nthTextNode(root, index) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    let i = 0;
+    while ((node = walker.nextNode())) {
+      if (i === index) return node;
+      i++;
+    }
+    return null;
+  }
+
+  // Finds which text node (by index among root's text nodes, in
+  // document order) and local offset within it a raw-text character
+  // offset falls on.
+  function locateTextOffset(root, offset) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    let consumed = 0;
+    let index = 0;
+    while ((node = walker.nextNode())) {
+      const len = node.nodeValue.length;
+      if (consumed + len >= offset) return { index, localOffset: offset - consumed };
+      consumed += len;
+      index++;
+    }
+    return null;
+  }
+
+  function findSecondDearIndex(text) {
+    const dearRe = /\bDear\b/g;
+    let match;
+    let count = 0;
+    while ((match = dearRe.exec(text))) {
+      count += 1;
+      if (count === 2) return match.index;
+    }
+    return -1;
+  }
+
+  // Splits a sanitized template fragment (text + <br> + <a>/<b>/<i>/<u>,
+  // arbitrarily nested \u2014 the shape htmlToTemplateFragment produces)
+  // into two DOM containers at a raw-text character offset, so a tag
+  // that straddles the split point (a sentence in bold running across
+  // the "Dear" boundary, say) still closes correctly on both sides.
+  // Uses the same clone-and-Range.deleteContents() trick a browser's
+  // own contenteditable relies on internally, just run on a detached
+  // element instead of the live DOM.
+  function splitFragmentAtOffset(fragment, offset) {
+    const probe = document.createElement('div');
+    probe.appendChild(document.importNode(fragment, true));
+    const loc = locateTextOffset(probe, offset);
+
+    const beforeContainer = document.createElement('div');
+    beforeContainer.appendChild(document.importNode(fragment, true));
+    const afterContainer = document.createElement('div');
+    afterContainer.appendChild(document.importNode(fragment, true));
+    if (!loc) return { beforeEl: beforeContainer, afterEl: afterContainer };
+
+    const beforeNode = nthTextNode(beforeContainer, loc.index);
+    const afterNode = nthTextNode(afterContainer, loc.index);
+
+    const rangeBefore = document.createRange();
+    rangeBefore.selectNodeContents(beforeContainer);
+    rangeBefore.setStart(beforeNode, loc.localOffset);
+    rangeBefore.deleteContents();
+
+    const rangeAfter = document.createRange();
+    rangeAfter.selectNodeContents(afterContainer);
+    rangeAfter.setEnd(afterNode, loc.localOffset);
+    rangeAfter.deleteContents();
+
+    return { beforeEl: beforeContainer, afterEl: afterContainer };
+  }
+
+  // HTML-aware counterpart to parseQuickTemplateBlock: tries to split
+  // pasted rich text into enquiry/reply DOM containers (each holding
+  // sanitized text + <br> + <a>/<b>/<i>/<u>) with formatting intact.
+  // Prefers an actual table's first two cells (the normal case \u2014
+  // copied straight out of a Word/Excel row); falls back to the same
+  // 2nd-"Dear" boundary the plain-text path uses, applied to the
+  // fragment itself so the split lands on the right character.
+  // Returns null if neither approach finds a usable split, so the
+  // caller can fall back to the plain-text-only parse.
+  function parseQuickTemplateHtml(html) {
+    const tableCells = firstTwoTableCells(html);
+    if (tableCells) {
+      const enquiryEl = document.createElement('div');
+      enquiryEl.appendChild(htmlToTemplateFragment(tableCells[0]));
+      const replyEl = document.createElement('div');
+      replyEl.appendChild(htmlToTemplateFragment(tableCells[1]));
+      return { enquiryEl, replyEl };
+    }
+
+    const fragment = htmlToTemplateFragment(html);
+    const splitIndex = findSecondDearIndex(flattenRawText(fragment));
+    if (splitIndex === -1) return null;
+
+    const { beforeEl, afterEl } = splitFragmentAtOffset(fragment, splitIndex);
+    return { enquiryEl: beforeEl, replyEl: afterEl };
+  }
+
+  function applyQuickTemplate(raw, html) {
     const subId = state.selectedSubEnquiryId;
     const sub = subId ? state.subEnquiries[subId] : null;
     if (!sub) return { ok: false, message: 'Select a Sub-Enquiry in the Hierarchy first.' };
 
-    const parsed = parseQuickTemplateBlock(raw);
-    if (!parsed) {
-      return {
-        ok: false,
-        message: 'Couldn\u2019t find a tab character or a 2nd \u201cDear\u201d to split the enquiry from the reply \u2014 paste the raw text copied straight from the table row.'
-      };
+    let enquiryText = '';
+    let templateText = '';
+    let templateHtml = '';
+    let templateLinks = [];
+
+    const htmlParsed = html ? parseQuickTemplateHtml(html) : null;
+    if (htmlParsed) {
+      enquiryText = plainTextFromElement(htmlParsed.enquiryEl).trim();
+      templateText = plainTextFromElement(htmlParsed.replyEl).trim();
+      if (enquiryText && templateText) {
+        templateHtml = htmlParsed.replyEl.innerHTML;
+        templateLinks = linksFromElement(htmlParsed.replyEl);
+      }
+    }
+
+    if (!enquiryText || !templateText) {
+      const parsed = parseQuickTemplateBlock(raw);
+      if (!parsed) {
+        return {
+          ok: false,
+          message: 'Couldn\u2019t find a tab character or a 2nd \u201cDear\u201d to split the enquiry from the reply \u2014 paste the raw text copied straight from the table row.'
+        };
+      }
+      enquiryText = parsed.enquiryText;
+      templateText = parsed.templateText;
+      templateHtml = '';
+      templateLinks = [];
     }
 
     const templates = subTemplates(sub);
@@ -2072,7 +2253,7 @@
     }
     activeTemplateId = tpl.id;
 
-    const keywords = extractKeywords(parsed.enquiryText);
+    const keywords = extractKeywords(enquiryText);
     const mergedKw = (tpl.keywords || []).slice();
     keywords.forEach((kw) => { if (!mergedKw.includes(kw)) mergedKw.push(kw); });
     tpl.keywords = mergedKw;
@@ -2085,7 +2266,7 @@
     }
 
     renderTemplateList(sub);
-    renderTemplateIntoEditor({ template: parsed.templateText, templateHtml: '', templateLinks: [] });
+    renderTemplateIntoEditor({ template: templateText, templateHtml: templateHtml, templateLinks: templateLinks });
     updateTemplateStatus(sub, tpl);
     renderTemplateKeywords(sub, tpl);
 
