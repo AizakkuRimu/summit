@@ -1006,6 +1006,21 @@
   text-decoration: underline;
 }
 
+.draft-result__editor-wrap {
+  margin: 6px 0 4px;
+}
+
+.draft-result__editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.draft-result__editor {
+  min-height: 100px;
+}
+
 /* ---------- 6/7. Find & Search (filter / reverse / deep thinking) ---------- */
 
 .draft-search-help {
@@ -1267,7 +1282,8 @@
   color: var(--bronze-deep);
 }
 
-.draft-field-label span {
+.draft-field-label span,
+.draft-col__subtitle span {
   text-transform: none;
   font-weight: 400;
   letter-spacing: 0;
