@@ -494,6 +494,7 @@
                 <select class="summit-select draft-file-select" id="draft-file-category" aria-label="Category" data-level="category" disabled></select>
                 <select class="summit-select draft-file-select" id="draft-file-enquiry" aria-label="Enquiry" data-level="enquiry" disabled></select>
                 <select class="summit-select draft-file-select" id="draft-file-subenquiry" aria-label="Sub-Enquiry" data-level="subenquiry" disabled></select>
+                <select class="summit-select draft-file-select" id="draft-file-template" aria-label="Template" data-level="template" disabled></select>
               </div>
               <button type="button" class="summit-btn summit-btn--primary" id="draft-file-btn" disabled>File keywords here</button>
             </div>
@@ -549,6 +550,13 @@
               <div class="draft-col__actions draft-col__actions--tight">
                 <button type="button" class="summit-btn" id="draft-template-add-btn">+ New template</button>
               </div>
+
+              <h3 class="draft-col__subtitle" id="draft-template-keywords-title">Keywords for this template <span>(filed here via the Template picker in Paste &amp; extract, or added below)</span></h3>
+              <div class="draft-keywords draft-keywords--filed" id="draft-template-keywords" aria-live="polite" aria-labelledby="draft-template-keywords-title"></div>
+              <div class="draft-tag-input" id="draft-template-keyword-tags">
+                <input type="text" class="draft-tag-input__field" id="draft-template-keyword-input" placeholder="Type a keyword for this template, press Enter…" autocomplete="off">
+              </div>
+
               <div id="draft-template-input" class="draft-textarea draft-textarea--template" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Template text for this Sub-Enquiry" data-placeholder="Paste or type the template text to attach to this Sub-Enquiry… (pasted hyperlinks stay clickable)"></div>
               <div class="draft-col__actions">
                 <button type="button" class="summit-btn summit-btn--primary" id="draft-template-save-btn">Save template</button>
