@@ -60,6 +60,7 @@
   const fileCategorySel = document.getElementById('draft-file-category');
   const fileEnquirySel = document.getElementById('draft-file-enquiry');
   const fileSubSel = document.getElementById('draft-file-subenquiry');
+  const fileTemplateSel = document.getElementById('draft-file-template');
   const fileBtn = document.getElementById('draft-file-btn');
 
   const addSchemeBtn = document.getElementById('draft-add-scheme-btn');
@@ -87,6 +88,8 @@
   const templateItalicBtn = document.getElementById('draft-template-italic-btn');
   const templateUnderlineBtn = document.getElementById('draft-template-underline-btn');
   const templateStatus = document.getElementById('draft-template-status');
+  const templateKeywordsEl = document.getElementById('draft-template-keywords');
+  const templateKeywordInput = document.getElementById('draft-template-keyword-input');
 
   const toastEl = document.getElementById('summit-toast');
   let toastTimer = null;
@@ -137,6 +140,10 @@
   const findCountEl = document.getElementById('draft-find-count');
   const findViewMoreBtn = document.getElementById('draft-find-viewmore-btn');
   const expandedResultIds = new Set();
+  // Which result cards (by "subId::tplId") currently show the inline
+  // text editor instead of the read-only snippet — mirrors
+  // expandedResultIds above.
+  const editingResultIds = new Set();
 
   const TEMPLATE_FINDER_PREVIEW_COUNT = 10;
   const TEMPLATE_FINDER_PAGE_SIZE = 20;
@@ -321,17 +328,34 @@
           name: 'Template 1',
           template: sub.template,
           templateHtml: sub.templateHtml || '',
-          templateLinks: sub.templateLinks || []
+          templateLinks: sub.templateLinks || [],
+          keywords: []
         });
       }
       delete sub.template;
       delete sub.templateHtml;
       delete sub.templateLinks;
     }
+    // Defensive: templates created before per-template keywords existed
+    // (or restored from an older save) may not have a keywords array yet.
+    sub.templates.forEach((t) => { if (!t.keywords) t.keywords = []; });
     return sub.templates;
   }
   function findTemplateById(sub, templateId) {
     return subTemplates(sub).find((t) => t.id === templateId) || null;
+  }
+  // A template's own filed keywords, plus the Sub-Enquiry's general
+  // keyword pool — used anywhere we're deciding whether a *specific*
+  // template matches, so a keyword filed generally against the Sub-
+  // Enquiry still helps every template under it, while a keyword filed
+  // to just one template doesn't bleed into its siblings.
+  function effectiveTemplateKeywords(sub, tpl) {
+    const general = (sub && sub.keywords) || [];
+    const own = (tpl && tpl.keywords) || [];
+    if (!own.length) return general.slice();
+    const merged = general.slice();
+    own.forEach((kw) => { if (!merged.includes(kw)) merged.push(kw); });
+    return merged;
   }
   // Every hyperlink across every template on a Sub-Enquiry (used by the
   // "All hyperlinks" list and duplicateSubEnquiry).
@@ -915,6 +939,7 @@
     );
     fileSubSel.disabled = false;
     fileSubSel.value = sub.id;
+    fillFileTemplateSelect(sub.id);
 
     updateFileButtonState();
     return true;
@@ -931,8 +956,55 @@
     }
     fileSubSel.innerHTML = '';
     fileSubSel.disabled = true;
+    resetFileTemplateSelect();
     updateFileButtonState();
   }
+
+  // ---------- 5th cascade step: which template (if any) these
+  // keywords should be filed against. Filing "General" keeps the old
+  // behaviour (keywords live on the Sub-Enquiry as a whole and apply
+  // to every template under it); picking a template files them onto
+  // just that template's own keyword list instead. ----------
+  function resetFileTemplateSelect() {
+    fileTemplateSel.innerHTML = '';
+    fileTemplateSel.disabled = true;
+  }
+
+  function fillFileTemplateSelect(subId) {
+    const sub = subId ? state.subEnquiries[subId] : null;
+    fileTemplateSel.innerHTML = '';
+    if (!sub) { fileTemplateSel.disabled = true; return; }
+    const generalOpt = document.createElement('option');
+    generalOpt.value = '';
+    generalOpt.textContent = 'General (Sub-Enquiry \u2014 all templates)';
+    fileTemplateSel.appendChild(generalOpt);
+    subTemplates(sub).forEach((tpl) => {
+      const opt = document.createElement('option');
+      opt.value = tpl.id;
+      opt.textContent = tpl.name || 'Untitled';
+      fileTemplateSel.appendChild(opt);
+    });
+    const newOpt = document.createElement('option');
+    newOpt.value = NEW_VALUE;
+    newOpt.textContent = '+ New template\u2026';
+    fileTemplateSel.appendChild(newOpt);
+    fileTemplateSel.disabled = false;
+    fileTemplateSel.value = '';
+  }
+
+  fileTemplateSel.addEventListener('change', () => {
+    if (fileTemplateSel.value !== NEW_VALUE) return;
+    const subId = fileSubSel.value;
+    const sub = subId ? state.subEnquiries[subId] : null;
+    if (!sub) { fileTemplateSel.value = ''; return; }
+    const templates = subTemplates(sub);
+    const name = window.prompt('New template name:', 'Template ' + (templates.length + 1));
+    if (!name || !name.trim()) { fileTemplateSel.value = ''; return; }
+    const tpl = { id: uid('tpl'), name: name.trim(), template: '', templateHtml: '', templateLinks: [], keywords: [] };
+    templates.push(tpl);
+    fillFileTemplateSelect(subId);
+    fileTemplateSel.value = tpl.id;
+  });
 
   function updateFileButtonState() {
     const subId = fileSubSel.value;
@@ -963,6 +1035,7 @@
     fileCategorySel.disabled = false;
     fileEnquirySel.innerHTML = ''; fileEnquirySel.disabled = true;
     fileSubSel.innerHTML = ''; fileSubSel.disabled = true;
+    resetFileTemplateSelect();
     updateFileButtonState();
   });
 
@@ -986,7 +1059,7 @@
       }
     }
     const categoryId = fileCategorySel.value;
-    if (!categoryId) { fileEnquirySel.innerHTML = ''; fileEnquirySel.disabled = true; fileSubSel.innerHTML = ''; fileSubSel.disabled = true; updateFileButtonState(); return; }
+    if (!categoryId) { fileEnquirySel.innerHTML = ''; fileEnquirySel.disabled = true; fileSubSel.innerHTML = ''; fileSubSel.disabled = true; resetFileTemplateSelect(); updateFileButtonState(); return; }
     const cat = state.categories[categoryId];
     fillSelect(
       fileEnquirySel,
@@ -995,6 +1068,7 @@
     );
     fileEnquirySel.disabled = false;
     fileSubSel.innerHTML = ''; fileSubSel.disabled = true;
+    resetFileTemplateSelect();
     updateFileButtonState();
   });
 
@@ -1026,6 +1100,7 @@
       'Select sub-enquiry\u2026', '+ New sub-enquiry\u2026'
     );
     fileSubSel.disabled = false;
+    resetFileTemplateSelect();
     updateFileButtonState();
   });
 
@@ -1034,6 +1109,7 @@
     const val = fileSubSel.value;
     if (val === NEW_VALUE) {
       fileSubSel.value = '';
+      resetFileTemplateSelect();
       updateFileButtonState();
       openNameHelper('', (name) => {
         const subId = createSubEnquiry(enquiryId, name);
@@ -1044,10 +1120,12 @@
           'Select sub-enquiry\u2026', '+ New sub-enquiry\u2026'
         );
         fileSubSel.value = subId;
+        fillFileTemplateSelect(subId);
         updateFileButtonState();
       });
       return;
     }
+    fillFileTemplateSelect(val || null);
     updateFileButtonState();
   });
 
@@ -1474,9 +1552,23 @@
     const subId = fileSubSel.value;
     if (!subId || subId === NEW_VALUE || state.pendingKeywords.length === 0) return;
     const sub = state.subEnquiries[subId];
-    const merged = sub.keywords.slice();
-    state.pendingKeywords.forEach((kw) => { if (!merged.includes(kw)) merged.push(kw); });
-    sub.keywords = merged;
+
+    const templateChoice = fileTemplateSel.value;
+    let targetTpl = null;
+    if (templateChoice && templateChoice !== NEW_VALUE) {
+      targetTpl = findTemplateById(sub, templateChoice);
+    }
+
+    if (targetTpl) {
+      const merged = (targetTpl.keywords || []).slice();
+      state.pendingKeywords.forEach((kw) => { if (!merged.includes(kw)) merged.push(kw); });
+      targetTpl.keywords = merged;
+      activeTemplateId = targetTpl.id;
+    } else {
+      const merged = sub.keywords.slice();
+      state.pendingKeywords.forEach((kw) => { if (!merged.includes(kw)) merged.push(kw); });
+      sub.keywords = merged;
+    }
     state.selectedSubEnquiryId = subId;
 
     // Expand the tree down to the newly-filed sub-enquiry.
@@ -1486,7 +1578,8 @@
     expandedIds.add(enq.categoryId);
     expandedIds.add(sub.enquiryId);
 
-    showToast('Filed ' + state.pendingKeywords.length + ' keyword(s) to ' + pathForSubEnquiry(subId));
+    showToast('Filed ' + state.pendingKeywords.length + ' keyword(s) to ' + pathForSubEnquiry(subId) +
+      (targetTpl ? ' \u2014 ' + (targetTpl.name || 'Untitled') : ' (general)'));
     renderAll();
   });
 
@@ -1545,6 +1638,67 @@
     const tpl = findTemplateById(sub, activeTemplateId);
     renderTemplateIntoEditor(tpl);
     updateTemplateStatus(sub, tpl);
+    renderTemplateKeywords(sub, tpl);
+  }
+
+  // ---------- Per-template keywords: shown/edited alongside whichever
+  // template tab is active. Kept separate from the general Sub-Enquiry
+  // "Keywords filed here" list above — see effectiveTemplateKeywords()
+  // for how the two combine when matching. ----------
+  function renderTemplateKeywords(sub, tpl) {
+    if (!templateKeywordsEl) return;
+    templateKeywordsEl.innerHTML = '';
+    if (!tpl) {
+      const note = document.createElement('p');
+      note.className = 'draft-empty-note';
+      note.textContent = 'Select or add a template to give it its own keywords.';
+      templateKeywordsEl.appendChild(note);
+      if (templateKeywordInput) templateKeywordInput.disabled = true;
+      return;
+    }
+    if (templateKeywordInput) templateKeywordInput.disabled = false;
+    const keywords = tpl.keywords || [];
+    if (keywords.length === 0) {
+      const note = document.createElement('p');
+      note.className = 'draft-empty-note';
+      note.textContent = 'No keywords filed to this template yet \u2014 it still matches on the Sub-Enquiry\u2019s general keywords above.';
+      templateKeywordsEl.appendChild(note);
+    } else {
+      keywords.forEach((kw) => {
+        const chip = document.createElement('span');
+        chip.className = 'draft-chip';
+        const label = document.createElement('span');
+        label.textContent = kw;
+        chip.appendChild(label);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'draft-chip__remove';
+        remove.setAttribute('aria-label', 'Remove template keyword ' + kw);
+        remove.textContent = '\u00D7';
+        remove.addEventListener('click', () => {
+          tpl.keywords = (tpl.keywords || []).filter((k) => k !== kw);
+          renderAll();
+        });
+        chip.appendChild(remove);
+        templateKeywordsEl.appendChild(chip);
+      });
+    }
+  }
+
+  if (templateKeywordInput) {
+    templateKeywordInput.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const sub = state.selectedSubEnquiryId ? state.subEnquiries[state.selectedSubEnquiryId] : null;
+      const tpl = sub ? findTemplateById(sub, activeTemplateId) : null;
+      const value = templateKeywordInput.value.trim();
+      if (!sub || !tpl || !value) return;
+      const merged = tpl.keywords || [];
+      if (!merged.includes(value)) merged.push(value);
+      tpl.keywords = merged;
+      templateKeywordInput.value = '';
+      renderAll();
+    });
   }
 
   // ---------- Template list (tabs) — pick which template is being
@@ -1603,6 +1757,7 @@
         renderTemplateList(sub);
         renderTemplateIntoEditor(tpl);
         updateTemplateStatus(sub, tpl);
+        renderTemplateKeywords(sub, tpl);
       });
       label.addEventListener('dblclick', (e) => {
         e.stopPropagation();
@@ -1657,6 +1812,7 @@
     renderTemplateList(sub);
     renderTemplateIntoEditor(nextTpl);
     updateTemplateStatus(sub, nextTpl);
+    renderTemplateKeywords(sub, nextTpl);
     showToast('Template removed from ' + sub.name +
       (labelsCleared ? ' \u2014 its tags were cleared too (no templates left).' : ''));
   }
@@ -1677,6 +1833,7 @@
       renderTemplateList(sub);
       renderTemplateIntoEditor(nextTpl);
       updateTemplateStatus(sub, nextTpl);
+      renderTemplateKeywords(sub, nextTpl);
     }
     showToast('Template removed from ' + sub.name +
       (labelsCleared ? ' \u2014 its tags were cleared too (no templates left).' : ''));
@@ -1699,12 +1856,13 @@
       if (!subId) return;
       const sub = state.subEnquiries[subId];
       const templates = subTemplates(sub);
-      const tpl = { id: uid('tpl'), name: 'Template ' + (templates.length + 1), template: '', templateHtml: '', templateLinks: [] };
+      const tpl = { id: uid('tpl'), name: 'Template ' + (templates.length + 1), template: '', templateHtml: '', templateLinks: [], keywords: [] };
       templates.push(tpl);
       activeTemplateId = tpl.id;
       renderTemplateList(sub);
       renderTemplateIntoEditor(tpl);
       updateTemplateStatus(sub, tpl);
+      renderTemplateKeywords(sub, tpl);
       templateInput.focus();
     });
   }
@@ -2106,21 +2264,22 @@
 
   // Editor -> plain text, preserving line breaks the same way the
   // rest of the app already does (br -> \n, block-level -> \n).
-  function editorPlainText() {
-    const clone = templateInput.cloneNode(true);
+  function plainTextFromElement(el) {
+    const clone = el.cloneNode(true);
     Array.from(clone.querySelectorAll('br')).forEach((br) => br.replaceWith('\n'));
-    Array.from(clone.querySelectorAll('div, p')).forEach((el) => el.insertAdjacentText('afterend', '\n'));
+    Array.from(clone.querySelectorAll('div, p')).forEach((elx) => elx.insertAdjacentText('afterend', '\n'));
     return (clone.textContent || '')
       .replace(/\n{3,}/g, '\n\n')
       .replace(/^\n+|\n+$/g, '');
   }
+  function editorPlainText() { return plainTextFromElement(templateInput); }
 
   // Editor -> the hyperlinks currently live inside it, in document
   // order, deduped by (text, url) pair.
-  function editorLinks() {
+  function linksFromElement(el) {
     const seen = new Set();
     const links = [];
-    Array.from(templateInput.querySelectorAll('a[href]')).forEach((a) => {
+    Array.from(el.querySelectorAll('a[href]')).forEach((a) => {
       const text = (a.textContent || '').trim();
       const url = (a.getAttribute('href') || '').trim();
       if (!text || !url) return;
@@ -2131,17 +2290,18 @@
     });
     return links;
   }
+  function editorLinks() { return linksFromElement(templateInput); }
 
-  function insertNodeAtCursor(node) {
-    templateInput.focus();
+  function insertNodeInto(el, node) {
+    el.focus();
     const sel = window.getSelection();
     let range;
-    if (sel && sel.rangeCount && templateInput.contains(sel.anchorNode)) {
+    if (sel && sel.rangeCount && el.contains(sel.anchorNode)) {
       range = sel.getRangeAt(0);
       range.deleteContents();
     } else {
       range = document.createRange();
-      range.selectNodeContents(templateInput);
+      range.selectNodeContents(el);
       range.collapse(false);
     }
     // A DocumentFragment empties itself into the document the moment
@@ -2158,6 +2318,7 @@
       sel.addRange(range);
     }
   }
+  function insertNodeAtCursor(node) { insertNodeInto(templateInput, node); }
 
   // Sanitizes pasted HTML down to just text + <a href> + <br>,
   // reusing the same Word paste-artifact cleanup as everywhere else
@@ -2244,8 +2405,8 @@
   // these tags, but this is a defensive pass so nothing stray (e.g. a
   // browser inserting a <div> for a line, or a <span style="...">)
   // ever reaches storage.
-  function sanitizeEditorHtml() {
-    const clone = templateInput.cloneNode(true);
+  function sanitizeElementHtml(el) {
+    const clone = el.cloneNode(true);
     (function clean(node) {
       Array.from(node.childNodes).forEach((child) => {
         if (child.nodeType === 3) return;
@@ -2282,6 +2443,7 @@
     }(clone));
     return clone.innerHTML;
   }
+  function sanitizeEditorHtml() { return sanitizeElementHtml(templateInput); }
 
   // Same whitelist cleanup as sanitizeEditorHtml, but for an arbitrary
   // HTML string (e.g. a FORMAT: line coming from an imported file) —
@@ -2330,40 +2492,47 @@
   if (templateItalicBtn) templateItalicBtn.addEventListener('click', () => { templateInput.focus(); document.execCommand('italic'); });
   if (templateUnderlineBtn) templateUnderlineBtn.addEventListener('click', () => { templateInput.focus(); document.execCommand('underline'); });
 
-  templateInput.addEventListener('paste', (e) => {
-    const cd = e.clipboardData || window.clipboardData;
-    if (!cd) return;
-    const html = cd.getData('text/html');
-    if (!html) return; // fall through to default plain-text paste
-    e.preventDefault();
-    const frag = htmlToTemplateFragment(html);
-    insertNodeAtCursor(frag);
-  });
+  // Attaches the same paste-cleanup + Ctrl+B/I/U + Enter\u2192<br> handling
+  // used by the main Tag view template editor to any contenteditable
+  // element — used for the main templateInput and for the inline
+  // per-card editors in the Find & Search results list.
+  function wireRichTextEditing(el) {
+    el.addEventListener('paste', (e) => {
+      const cd = e.clipboardData || window.clipboardData;
+      if (!cd) return;
+      const html = cd.getData('text/html');
+      if (!html) return; // fall through to default plain-text paste
+      e.preventDefault();
+      const frag = htmlToTemplateFragment(html);
+      insertNodeInto(el, frag);
+    });
 
-  // The rest of the editor treats content as flat text + <a> + <br> (see
-  // editorPlainText/editorLinks above and htmlToTemplateFragment). Left
-  // to the browser's own Enter handling, a new line can come in wrapped
-  // in a <div> or <p> instead — which one varies by browser — and that
-  // element carries its own default margin, so it renders with a taller
-  // gap than the single <br> lines from a paste use, and backspacing
-  // across the boundary between the two models behaves inconsistently.
-  // Inserting a plain <br> ourselves keeps every line, typed or pasted,
-  // on the same model.
-  templateInput.addEventListener('keydown', (e) => {
-    const mod = e.ctrlKey || e.metaKey;
-    if (mod && !e.shiftKey && !e.altKey && (e.key === 'b' || e.key === 'B')) {
-      e.preventDefault(); document.execCommand('bold'); return;
-    }
-    if (mod && !e.shiftKey && !e.altKey && (e.key === 'i' || e.key === 'I')) {
-      e.preventDefault(); document.execCommand('italic'); return;
-    }
-    if (mod && !e.shiftKey && !e.altKey && (e.key === 'u' || e.key === 'U')) {
-      e.preventDefault(); document.execCommand('underline'); return;
-    }
-    if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
-    e.preventDefault();
-    insertNodeAtCursor(document.createElement('br'));
-  });
+    // The rest of the editor treats content as flat text + <a> + <br> (see
+    // editorPlainText/editorLinks above and htmlToTemplateFragment). Left
+    // to the browser's own Enter handling, a new line can come in wrapped
+    // in a <div> or <p> instead — which one varies by browser — and that
+    // element carries its own default margin, so it renders with a taller
+    // gap than the single <br> lines from a paste use, and backspacing
+    // across the boundary between the two models behaves inconsistently.
+    // Inserting a plain <br> ourselves keeps every line, typed or pasted,
+    // on the same model.
+    el.addEventListener('keydown', (e) => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && !e.shiftKey && !e.altKey && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault(); document.execCommand('bold'); return;
+      }
+      if (mod && !e.shiftKey && !e.altKey && (e.key === 'i' || e.key === 'I')) {
+        e.preventDefault(); document.execCommand('italic'); return;
+      }
+      if (mod && !e.shiftKey && !e.altKey && (e.key === 'u' || e.key === 'U')) {
+        e.preventDefault(); document.execCommand('underline'); return;
+      }
+      if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      e.preventDefault();
+      insertNodeInto(el, document.createElement('br'));
+    });
+  }
+  wireRichTextEditing(templateInput);
 
   if (templateLinkBtn) {
     templateLinkBtn.addEventListener('click', () => {
@@ -2393,7 +2562,7 @@
     if (!tpl) {
       // Nothing selected yet (fresh Sub-Enquiry) — Save creates the
       // first template slot rather than silently doing nothing.
-      tpl = { id: uid('tpl'), name: 'Template ' + (templates.length + 1), template: '', templateHtml: '', templateLinks: [] };
+      tpl = { id: uid('tpl'), name: 'Template ' + (templates.length + 1), template: '', templateHtml: '', templateLinks: [], keywords: [] };
       templates.push(tpl);
       activeTemplateId = tpl.id;
     }
@@ -2403,6 +2572,7 @@
     commitPendingLabelInput();
     sub.labels = pendingLabels.slice();
     renderTemplateList(sub);
+    renderTemplateKeywords(sub, tpl);
     templateStatus.textContent = 'Saved \u2014 linked to ' + sub.name +
       (sub.labels.length ? ' \u2014 tagged ' + sub.labels.map((l) => '#' + l).join(' ') + '.' : '.');
     templateStatus.classList.add('is-saved');
@@ -2572,7 +2742,7 @@
         if (!tpl.template) return;
         if (q) {
           const haystack = [scheme && scheme.name, cat && cat.name, enq && enq.name, sub.name, tpl.name,
-            sub.keywords.join(' '), subLabels(sub).join(' '), tpl.template].filter(Boolean).join(' \u2022 ').toLowerCase();
+            effectiveTemplateKeywords(sub, tpl).join(' '), subLabels(sub).join(' '), tpl.template].filter(Boolean).join(' \u2022 ').toLowerCase();
           if (!haystack.includes(q)) return;
         }
         results.push({ sub, tpl, enq, cat, scheme });
@@ -2602,7 +2772,7 @@
     const lowerQ = q.toLowerCase();
     const scored = results.map((r) => {
       const kwScore = queryKeywords.length
-        ? keywordOverlapScore(queryKeywords, r.sub.keywords).score
+        ? keywordOverlapScore(queryKeywords, effectiveTemplateKeywords(r.sub, r.tpl)).score
         : 0;
       const nameHit = r.sub.name.toLowerCase().includes(lowerQ) ? 1 : 0;
       const textHits = Math.min(5, r.tpl.template.toLowerCase().split(lowerQ).length - 1);
@@ -2912,27 +3082,143 @@
       });
       card.appendChild(kwWrap);
     }
+    if ((tpl.keywords || []).length > 0) {
+      const tplKwWrap = document.createElement('div');
+      tplKwWrap.className = 'draft-result__keywords';
+      tpl.keywords.forEach((kw) => {
+        const chip = document.createElement('span');
+        chip.className = 'draft-chip draft-chip--match';
+        chip.title = 'Filed to this template specifically';
+        chip.appendChild(highlightedFragment(kw, q));
+        tplKwWrap.appendChild(chip);
+      });
+      card.appendChild(tplKwWrap);
+    }
 
     const expanded = expandedResultIds.has(resultKey);
-    const snippet = document.createElement('p');
-    snippet.className = 'draft-result__snippet';
-    const isLong = renderTemplateSnippetInto(snippet, tpl, q, expanded);
-    card.appendChild(snippet);
+    const editing = editingResultIds.has(resultKey);
 
-    if (isLong) {
-      const toggle = document.createElement('button');
-      toggle.type = 'button';
-      toggle.className = 'draft-result__toggle';
-      toggle.textContent = expanded ? 'Show less' : 'Show full template';
-      toggle.addEventListener('click', () => {
-        if (expanded) expandedResultIds.delete(resultKey); else expandedResultIds.add(resultKey);
-        rerender();
-      });
-      card.appendChild(toggle);
+    let getEditorValue = null; // set while editing; reads back the live editor content on Save
+
+    if (editing) {
+      const editorWrap = document.createElement('div');
+      editorWrap.className = 'draft-result__editor-wrap';
+
+      const toolbar = document.createElement('div');
+      toolbar.className = 'draft-result__editor-toolbar';
+
+      const editorBox = document.createElement('div');
+      editorBox.className = 'draft-textarea draft-textarea--template draft-result__editor';
+      editorBox.contentEditable = 'true';
+      editorBox.setAttribute('role', 'textbox');
+      editorBox.setAttribute('aria-multiline', 'true');
+      editorBox.setAttribute('aria-label', 'Edit template text for ' + sub.name);
+      editorBox.innerHTML = tpl.templateHtml ? tpl.templateHtml : (tpl.template ? templateToHtml(tpl) : '');
+      wireRichTextEditing(editorBox);
+
+      const makeToolBtn = (html, title, onClick) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'summit-btn';
+        b.innerHTML = html;
+        b.title = title;
+        b.addEventListener('mousedown', (e) => e.preventDefault()); // keep focus/selection in editorBox
+        b.addEventListener('click', onClick);
+        return b;
+      };
+      toolbar.appendChild(makeToolBtn('<b>B</b>', 'Bold (Ctrl+B)', () => { editorBox.focus(); document.execCommand('bold'); }));
+      toolbar.appendChild(makeToolBtn('<i>I</i>', 'Italic (Ctrl+I)', () => { editorBox.focus(); document.execCommand('italic'); }));
+      toolbar.appendChild(makeToolBtn('<u>U</u>', 'Underline (Ctrl+U)', () => { editorBox.focus(); document.execCommand('underline'); }));
+      toolbar.appendChild(makeToolBtn('Insert link', 'Insert a link at the cursor', () => {
+        const sel = window.getSelection();
+        const selectedText = (sel && sel.rangeCount && editorBox.contains(sel.anchorNode)) ? sel.toString() : '';
+        const url = window.prompt('Link URL:');
+        if (!url || !url.trim()) return;
+        const label = window.prompt('Link text (leave blank to show the URL itself):', selectedText || '');
+        const trimmedUrl = url.trim();
+        const trimmedLabel = (label || '').trim() || trimmedUrl;
+        const a = document.createElement('a');
+        a.setAttribute('href', trimmedUrl);
+        a.setAttribute('target', '_blank');
+        a.setAttribute('rel', 'noopener');
+        a.textContent = trimmedLabel;
+        insertNodeInto(editorBox, a);
+      }));
+
+      editorWrap.appendChild(toolbar);
+      editorWrap.appendChild(editorBox);
+      card.appendChild(editorWrap);
+      getEditorValue = () => editorBox;
+      // Cursor in, ready to type, as soon as the card renders.
+      requestAnimationFrame(() => editorBox.focus());
+    } else {
+      const snippet = document.createElement('p');
+      snippet.className = 'draft-result__snippet';
+      const isLong = renderTemplateSnippetInto(snippet, tpl, q, expanded);
+      card.appendChild(snippet);
+
+      if (isLong) {
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'draft-result__toggle';
+        toggle.textContent = expanded ? 'Show less' : 'Show full template';
+        toggle.addEventListener('click', () => {
+          if (expanded) expandedResultIds.delete(resultKey); else expandedResultIds.add(resultKey);
+          rerender();
+        });
+        card.appendChild(toggle);
+      }
     }
 
     const actions = document.createElement('div');
     actions.className = 'draft-result__actions';
+
+    if (editing) {
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button';
+      saveBtn.className = 'summit-btn summit-btn--primary';
+      saveBtn.textContent = 'Save';
+      saveBtn.addEventListener('click', () => {
+        const editorBox = getEditorValue();
+        tpl.template = plainTextFromElement(editorBox);
+        tpl.templateLinks = linksFromElement(editorBox);
+        tpl.templateHtml = sanitizeElementHtml(editorBox);
+        editingResultIds.delete(resultKey);
+        if (sub.id === state.selectedSubEnquiryId && activeTemplateId === tpl.id) {
+          renderTemplateIntoEditor(tpl);
+          updateTemplateStatus(sub, tpl);
+        }
+        renderTree();
+        buildDeepIndex();
+        showToast('Template updated for ' + sub.name);
+        rerender();
+      });
+      actions.appendChild(saveBtn);
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'summit-btn';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.addEventListener('click', () => {
+        editingResultIds.delete(resultKey);
+        rerender();
+      });
+      actions.appendChild(cancelBtn);
+
+      card.appendChild(actions);
+      return card;
+    }
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'summit-btn';
+    editBtn.textContent = 'Edit text';
+    editBtn.setAttribute('aria-label', 'Edit text of template ' + (tpl.name || 'Untitled'));
+    editBtn.addEventListener('click', () => {
+      editingResultIds.add(resultKey);
+      rerender();
+    });
+    actions.appendChild(editBtn);
 
     const copyBtn = document.createElement('button');
     copyBtn.type = 'button';
@@ -3449,6 +3735,8 @@
   // ---------- Entry format ----------
   // PATH: Scheme > Category > Enquiry > Sub-Enquiry
   // KEYWORDS: kw1, kw2
+  // TEMPLATE_KEYWORDS: kw3, kw4  (this one template's own keywords,
+  //   separate from the Sub-Enquiry's general KEYWORDS: above)
   // LABEL: tag1, tag2
   // LINKS:
   // <link display text> => <full URL>
@@ -3488,6 +3776,7 @@
       'KEYWORDS: ' + sub.keywords.join(', ') + '\n' +
       'LABEL: ' + subLabels(sub).join(', ') + '\n' +
       'TEMPLATE_NAME: ' + (tpl.name || '') + '\n' +
+      'TEMPLATE_KEYWORDS: ' + (tpl.keywords || []).join(', ') + '\n' +
       linksBlock +
       formatBlock +
       'TEMPLATE:\n' + tpl.template + '\n' +
@@ -3579,6 +3868,7 @@
       const heading = pathForSubEnquiry(sub.id) + (entries.filter((e) => e.sub.id === sub.id).length > 1 ? ' \u2014 ' + (tpl.name || 'Untitled') : '');
       return '<h2>' + escapeHtmlLocal(heading) + '</h2>' +
         (sub.keywords.length ? '<p><em>Keywords: ' + escapeHtmlLocal(sub.keywords.join(', ')) + '</em></p>' : '') +
+        ((tpl.keywords || []).length ? '<p><em>Template keywords: ' + escapeHtmlLocal(tpl.keywords.join(', ')) + '</em></p>' : '') +
         (labels.length ? '<p><em>Tags: ' + escapeHtmlLocal(labels.map((l) => '#' + l).join(' ')) + '</em></p>' : '') +
         '<p>' + templateToHtml(tpl) + '</p>';
     }).join('');
@@ -3728,6 +4018,7 @@
     const keywordsMatch = block.match(/^KEYWORDS:\s*(.*)$/m);
     const labelMatch = block.match(/^LABEL:\s*(.*)$/m);
     const templateNameMatch = block.match(/^TEMPLATE_NAME:\s*(.*)$/m);
+    const templateKeywordsMatch = block.match(/^TEMPLATE_KEYWORDS:\s*(.*)$/m);
     const linksMatch = block.match(/^LINKS:\n([\s\S]*?)(?=^(?:FORMAT:|TEMPLATE:))/m);
     const formatMatch = block.match(/^FORMAT:\s*(.*)$/m);
     const templateMatch = block.match(/^TEMPLATE:\n([\s\S]*)$/m);
@@ -3755,7 +4046,13 @@
     // treated as "unnamed" so import can fall back to updating a Sub-
     // Enquiry's one existing template in place (see importEntryText).
     const templateName = templateNameMatch ? templateNameMatch[1].trim() : null;
-    return { path: segments, keywords, labels, links, templateHtml, templateName, template: templateMatch[1].replace(/\n$/, '') };
+    // Same null-vs-empty distinction as LABEL: above — no
+    // TEMPLATE_KEYWORDS: line (older export) leaves the template's
+    // existing keywords untouched rather than clearing them.
+    const templateKeywords = templateKeywordsMatch
+      ? templateKeywordsMatch[1].split(',').map((k) => k.trim()).filter(Boolean)
+      : null;
+    return { path: segments, keywords, labels, links, templateHtml, templateName, templateKeywords, template: templateMatch[1].replace(/\n$/, '') };
   }
 
   function importEntryText(text) {
@@ -3784,7 +4081,7 @@
       let tpl = entry.templateName ? templates.find((t) => t.name === entry.templateName) : null;
       if (!tpl && !entry.templateName && templates.length === 1) tpl = templates[0];
       if (!tpl) {
-        tpl = { id: uid('tpl'), name: entry.templateName || ('Template ' + (templates.length + 1)), template: '', templateHtml: '', templateLinks: [] };
+        tpl = { id: uid('tpl'), name: entry.templateName || ('Template ' + (templates.length + 1)), template: '', templateHtml: '', templateLinks: [], keywords: [] };
         templates.push(tpl);
       } else if (entry.templateName) {
         tpl.name = entry.templateName;
@@ -3795,6 +4092,10 @@
       // overwrite templateHtml when the import actually specifies one.
       if (entry.templateHtml !== null) tpl.templateHtml = entry.templateHtml;
       if (entry.links !== null) tpl.templateLinks = entry.links;
+      // Same "not specified means leave alone" rule as LABEL: — a
+      // TEMPLATE_KEYWORDS: line always sets this template's own
+      // keywords (even to empty); no line at all keeps whatever it had.
+      if (entry.templateKeywords !== null) tpl.keywords = entry.templateKeywords;
       if (existed) updated += 1; else created += 1;
     });
     refreshLabelDatalist();
@@ -4403,7 +4704,8 @@
           name: t.name,
           template: t.template || '',
           templateHtml: t.templateHtml || '',
-          templateLinks: (t.templateLinks || []).map((l) => ({ text: l.text, url: l.url }))
+          templateLinks: (t.templateLinks || []).map((l) => ({ text: l.text, url: l.url })),
+          keywords: (t.keywords || []).slice()
         })),
         labels: subLabels(source).slice()
       };
