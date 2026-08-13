@@ -31,6 +31,10 @@
   state.subEnquiries = state.subEnquiries || {}; // id -> { id, name, enquiryId, keywords: [], template: '' }
   state.pendingKeywords = state.pendingKeywords || []; // current extract-session keyword list
   state.selectedSubEnquiryId = state.selectedSubEnquiryId || null;
+  // Most-recent-first list of Name/Term labels actually saved against a
+  // Sub-Enquiry (see recordLabelUsage()) — used by the Quick Template
+  // Adder to guess which two labels to pre-fill.
+  state.recentLabels = state.recentLabels || [];
 
   const expandedIds = new Set(); // runtime-only tree expand/collapse state
 
@@ -75,11 +79,13 @@
   const detailContent = document.getElementById('draft-detail-content');
   const detailPath = document.getElementById('draft-detail-path');
   const detailKeywordsEl = document.getElementById('draft-detail-keywords');
+  const detailKeywordsClearBtn = document.getElementById('draft-detail-keywords-clear-btn');
   const labelInput = document.getElementById('draft-label-input');
   const labelTagsEl = document.getElementById('draft-label-tags');
   const labelDatalist = document.getElementById('draft-label-datalist');
   const templateListEl = document.getElementById('draft-template-list');
   const templateAddBtn = document.getElementById('draft-template-add-btn');
+  const quickTemplateBtn = document.getElementById('draft-quick-template-btn');
   const templateInput = document.getElementById('draft-template-input');
   const templateSaveBtn = document.getElementById('draft-template-save-btn');
   const templateClearBtn = document.getElementById('draft-template-clear-btn');
@@ -89,6 +95,7 @@
   const templateUnderlineBtn = document.getElementById('draft-template-underline-btn');
   const templateStatus = document.getElementById('draft-template-status');
   const templateKeywordsEl = document.getElementById('draft-template-keywords');
+  const templateKeywordsClearBtn = document.getElementById('draft-template-keywords-clear-btn');
   const templateKeywordInput = document.getElementById('draft-template-keyword-input');
 
   const toastEl = document.getElementById('summit-toast');
@@ -1600,6 +1607,7 @@
       detailEmpty.hidden = false;
       detailContent.hidden = true;
       activeTemplateId = null;
+      if (detailKeywordsClearBtn) detailKeywordsClearBtn.disabled = true;
       return;
     }
     detailEmpty.hidden = true;
@@ -1632,6 +1640,7 @@
         detailKeywordsEl.appendChild(chip);
       });
     }
+    if (detailKeywordsClearBtn) detailKeywordsClearBtn.disabled = sub.keywords.length === 0;
 
     renderLabelChips(subLabels(sub).slice());
     renderTemplateList(sub);
@@ -1639,6 +1648,17 @@
     renderTemplateIntoEditor(tpl);
     updateTemplateStatus(sub, tpl);
     renderTemplateKeywords(sub, tpl);
+  }
+
+  if (detailKeywordsClearBtn) {
+    detailKeywordsClearBtn.addEventListener('click', () => {
+      const subId = state.selectedSubEnquiryId;
+      const sub = subId ? state.subEnquiries[subId] : null;
+      if (!sub || sub.keywords.length === 0) return;
+      if (!window.confirm('Remove all ' + sub.keywords.length + ' keyword(s) filed here on ' + sub.name + '?')) return;
+      sub.keywords = [];
+      renderAll();
+    });
   }
 
   // ---------- Per-template keywords: shown/edited alongside whichever
@@ -1654,10 +1674,12 @@
       note.textContent = 'Select or add a template to give it its own keywords.';
       templateKeywordsEl.appendChild(note);
       if (templateKeywordInput) templateKeywordInput.disabled = true;
+      if (templateKeywordsClearBtn) templateKeywordsClearBtn.disabled = true;
       return;
     }
     if (templateKeywordInput) templateKeywordInput.disabled = false;
     const keywords = tpl.keywords || [];
+    if (templateKeywordsClearBtn) templateKeywordsClearBtn.disabled = keywords.length === 0;
     if (keywords.length === 0) {
       const note = document.createElement('p');
       note.className = 'draft-empty-note';
@@ -1697,6 +1719,17 @@
       if (!merged.includes(value)) merged.push(value);
       tpl.keywords = merged;
       templateKeywordInput.value = '';
+      renderAll();
+    });
+  }
+
+  if (templateKeywordsClearBtn) {
+    templateKeywordsClearBtn.addEventListener('click', () => {
+      const sub = state.selectedSubEnquiryId ? state.subEnquiries[state.selectedSubEnquiryId] : null;
+      const tpl = sub ? findTemplateById(sub, activeTemplateId) : null;
+      if (!tpl || !(tpl.keywords || []).length) return;
+      if (!window.confirm('Remove all ' + tpl.keywords.length + ' keyword(s) from ' + (tpl.name || 'this template') + '?')) return;
+      tpl.keywords = [];
       renderAll();
     });
   }
@@ -1867,6 +1900,204 @@
     });
   }
 
+  // ============================================================
+  // Quick Template Adder — paste a raw two-column block (as copied
+  // straight out of a Word table: the member's enquiry, a tab, then
+  // the officer's reply) and have it:
+  //   1. split into enquiry text / reply text,
+  //   2. run the enquiry text through the same extractKeywords() used
+  //      by Paste & extract, filing the result as this template's own
+  //      keywords,
+  //   3. find the next template slot on the *currently selected*
+  //      Sub-Enquiry that doesn't already have saved text yet (1, 2,
+  //      3… creating a new one if every existing slot is full),
+  //   4. pre-fill Name/Term with the two most recently used labels
+  //      (or, failing any usage history, the two used most often
+  //      overall),
+  //   5. drop the reply text into the template editor, unsaved — same
+  //      as typing it in by hand — so "Save template" still applies.
+  // ============================================================
+
+  let quickTplEl = null;
+
+  function ensureQuickTemplateModal() {
+    if (quickTplEl) return quickTplEl;
+
+    const modal = document.createElement('div');
+    modal.className = 'summit-modal draft-quicktpl';
+    modal.id = 'draft-quicktpl-modal';
+    modal.hidden = true;
+    modal.setAttribute('aria-hidden', 'true');
+    modal.innerHTML =
+      '<div class="summit-modal__backdrop" data-quicktpl-close></div>' +
+      '<div class="summit-modal__panel draft-quicktpl__panel" role="dialog" aria-modal="true" aria-labelledby="draft-quicktpl-title">' +
+        '<div class="summit-modal__header">' +
+          '<h2 class="summit-modal__title" id="draft-quicktpl-title">Quick template adder</h2>' +
+          '<button type="button" class="summit-modal__close" data-quicktpl-close aria-label="Close">\u2715</button>' +
+        '</div>' +
+        '<p class="draft-name-helper__hint" id="draft-quicktpl-target"></p>' +
+        '<p class="draft-search-help">Paste the two-column block copied straight from your table \u2014 the member\u2019s enquiry, then a tab, then the reply. If the tab gets lost in the paste, this falls back to splitting at the 2nd \u201cDear\u201d.</p>' +
+        '<textarea class="draft-textarea" id="draft-quicktpl-input" placeholder="Paste the raw enquiry + reply block here\u2026" aria-label="Raw enquiry and reply text to parse"></textarea>' +
+        '<div class="summit-modal__actions">' +
+          '<button type="button" class="summit-btn" data-quicktpl-close>Cancel</button>' +
+          '<button type="button" class="summit-btn summit-btn--primary" id="draft-quicktpl-apply-btn">Extract &amp; fill template</button>' +
+        '</div>' +
+        '<p class="draft-template-status" id="draft-quicktpl-status" aria-live="polite"></p>' +
+      '</div>';
+    document.body.appendChild(modal);
+
+    const targetEl = modal.querySelector('#draft-quicktpl-target');
+    const inputEl = modal.querySelector('#draft-quicktpl-input');
+    const applyBtn = modal.querySelector('#draft-quicktpl-apply-btn');
+    const statusEl = modal.querySelector('#draft-quicktpl-status');
+
+    applyBtn.addEventListener('click', () => {
+      const raw = inputEl.value;
+      if (!raw || !raw.trim()) {
+        statusEl.textContent = 'Paste some text first.';
+        statusEl.classList.remove('is-saved');
+        return;
+      }
+      const result = applyQuickTemplate(raw);
+      statusEl.textContent = result.message;
+      statusEl.classList.toggle('is-saved', result.ok);
+      if (result.ok) {
+        inputEl.value = '';
+        showToast(result.message);
+      }
+    });
+
+    modal.querySelectorAll('[data-quicktpl-close]').forEach((el) => {
+      el.addEventListener('click', closeQuickTemplateModal);
+    });
+
+    quickTplEl = modal;
+    quickTplEl._target = targetEl;
+    quickTplEl._input = inputEl;
+    quickTplEl._apply = applyBtn;
+    quickTplEl._status = statusEl;
+    return modal;
+  }
+
+  function openQuickTemplateModal() {
+    const modal = ensureQuickTemplateModal();
+    const subId = state.selectedSubEnquiryId;
+    const sub = subId ? state.subEnquiries[subId] : null;
+    modal._status.textContent = '';
+    modal._status.classList.remove('is-saved');
+    if (sub) {
+      modal._target.textContent = 'Will fill the next available template on: ' + pathForSubEnquiry(subId);
+      modal._apply.disabled = false;
+    } else {
+      modal._target.textContent = 'Select a Sub-Enquiry in the Hierarchy first, then reopen this.';
+      modal._apply.disabled = true;
+    }
+    modal.hidden = false;
+    modal.setAttribute('aria-hidden', 'false');
+    modal._input.focus();
+  }
+
+  function closeQuickTemplateModal() {
+    if (!quickTplEl) return;
+    quickTplEl.hidden = true;
+    quickTplEl.setAttribute('aria-hidden', 'true');
+  }
+
+  if (quickTemplateBtn) quickTemplateBtn.addEventListener('click', openQuickTemplateModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && quickTplEl && !quickTplEl.hidden) closeQuickTemplateModal();
+  });
+
+  // Splits a raw pasted block into { enquiryText, templateText }.
+  // Primary rule: split at the first literal tab character (the
+  // column boundary when copying a row straight out of a Word/Excel
+  // table). Fallback, for when a paste strips tabs: split right
+  // before the 2nd whole-word "Dear" in the text, since these table
+  // exports always start the enquiry with a greeting and the reply
+  // with a second one.
+  function parseQuickTemplateBlock(raw) {
+    const text = raw.replace(/\r\n/g, '\n');
+    let enquiryPart;
+    let replyPart;
+    const tabIndex = text.indexOf('\t');
+    if (tabIndex !== -1) {
+      enquiryPart = text.slice(0, tabIndex);
+      replyPart = text.slice(tabIndex + 1);
+    } else {
+      const dearRe = /\bDear\b/g;
+      let match;
+      let count = 0;
+      let splitIndex = -1;
+      while ((match = dearRe.exec(text))) {
+        count += 1;
+        if (count === 2) { splitIndex = match.index; break; }
+      }
+      if (splitIndex === -1) return null;
+      enquiryPart = text.slice(0, splitIndex);
+      replyPart = text.slice(splitIndex);
+    }
+    enquiryPart = enquiryPart.trim();
+    replyPart = replyPart.trim();
+    if (!enquiryPart || !replyPart) return null;
+    return { enquiryText: enquiryPart, templateText: replyPart };
+  }
+
+  function applyQuickTemplate(raw) {
+    const subId = state.selectedSubEnquiryId;
+    const sub = subId ? state.subEnquiries[subId] : null;
+    if (!sub) return { ok: false, message: 'Select a Sub-Enquiry in the Hierarchy first.' };
+
+    const parsed = parseQuickTemplateBlock(raw);
+    if (!parsed) {
+      return {
+        ok: false,
+        message: 'Couldn\u2019t find a tab character or a 2nd \u201cDear\u201d to split the enquiry from the reply \u2014 paste the raw text copied straight from the table row.'
+      };
+    }
+
+    const templates = subTemplates(sub);
+    let tpl = templates.find((t) => !t.template || !t.template.trim());
+    const createdNew = !tpl;
+    if (!tpl) {
+      tpl = { id: uid('tpl'), name: 'Template ' + (templates.length + 1), template: '', templateHtml: '', templateLinks: [], keywords: [] };
+      templates.push(tpl);
+    } else if (tpl.id === activeTemplateId) {
+      // The empty slot is the one currently open in the editor — if it
+      // already has unsaved draft text sitting in there, don't silently
+      // clobber it.
+      const currentDraft = editorPlainText().trim();
+      if (currentDraft && !window.confirm('The template box already has unsaved text \u2014 overwrite it with the newly pasted reply?')) {
+        return { ok: false, message: 'Cancelled \u2014 left the existing draft untouched.' };
+      }
+    }
+    activeTemplateId = tpl.id;
+
+    const keywords = extractKeywords(parsed.enquiryText);
+    const mergedKw = (tpl.keywords || []).slice();
+    keywords.forEach((kw) => { if (!mergedKw.includes(kw)) mergedKw.push(kw); });
+    tpl.keywords = mergedKw;
+
+    const recommended = recommendedLabels();
+    if (recommended.length) {
+      const mergedLabels = subLabels(sub).slice();
+      recommended.forEach((l) => { if (!mergedLabels.includes(l)) mergedLabels.push(l); });
+      renderLabelChips(mergedLabels);
+    }
+
+    renderTemplateList(sub);
+    renderTemplateIntoEditor({ template: parsed.templateText, templateHtml: '', templateLinks: [] });
+    updateTemplateStatus(sub, tpl);
+    renderTemplateKeywords(sub, tpl);
+
+    return {
+      ok: true,
+      message: 'Filled ' + tpl.name + (createdNew ? ' (new)' : '') + ' on ' + pathForSubEnquiry(subId) +
+        ' \u2014 ' + keywords.length + ' keyword(s) extracted' +
+        (recommended.length ? ', tagged ' + recommended.map((l) => '#' + l).join(' ') : '') +
+        '. Review the template box, then click Save template.'
+    };
+  }
+
   // ---------- Template Labellers ----------
   // Every Sub-Enquiry can carry any number of free-text tags (a
   // person's name, a recurring term, etc.) alongside its template —
@@ -1934,6 +2165,32 @@
     const set = new Set();
     Object.values(state.subEnquiries).forEach((s) => subLabels(s).forEach((l) => { if (l) set.add(l); }));
     return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }
+
+  // Bumps each of the given labels to the front of state.recentLabels
+  // (most-recent-first, deduped) — called whenever a Sub-Enquiry's
+  // labels are actually saved. Powers the Quick Template Adder's
+  // "two most recently used" guess.
+  function recordLabelUsage(labels) {
+    if (!labels || !labels.length) return;
+    state.recentLabels = state.recentLabels || [];
+    labels.slice().reverse().forEach((label) => {
+      if (!label) return;
+      state.recentLabels = state.recentLabels.filter((l) => l !== label);
+      state.recentLabels.unshift(label);
+    });
+    if (state.recentLabels.length > 50) state.recentLabels.length = 50;
+  }
+
+  // The two labels the Quick Template Adder should pre-fill: the most
+  // recently saved ones if there's any history, otherwise the two used
+  // on the most Sub-Enquiries overall.
+  function recommendedLabels() {
+    const recent = (state.recentLabels || []).filter(Boolean);
+    if (recent.length) return recent.slice(0, 2);
+    const counts = {};
+    Object.values(state.subEnquiries).forEach((s) => subLabels(s).forEach((l) => { if (l) counts[l] = (counts[l] || 0) + 1; }));
+    return Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 2);
   }
 
   function refreshLabelDatalist() {
@@ -2571,6 +2828,7 @@
     tpl.templateHtml = sanitizeEditorHtml();
     commitPendingLabelInput();
     sub.labels = pendingLabels.slice();
+    recordLabelUsage(sub.labels);
     renderTemplateList(sub);
     renderTemplateKeywords(sub, tpl);
     templateStatus.textContent = 'Saved \u2014 linked to ' + sub.name +
@@ -3808,6 +4066,24 @@
     buildDeepIndex();
     if (reverseHasSearched) renderReverseResults();
     if (subpanels.importexport && !subpanels.importexport.hidden) renderBatchList();
+    syncFileSelectsToTreeSelection();
+  }
+
+  // Keeps the "File keywords here" cascade (Paste & extract panel)
+  // pointed at whichever Sub-Enquiry is currently selected in the
+  // Hierarchy. Previously this only happened once, at the moment
+  // Extract was clicked — so clicking a *different* Sub-Enquiry
+  // afterward (while keywords were still awaiting filing) left the
+  // picker silently pointed at the old one, and "File keywords here"
+  // would file against the wrong Sub-Enquiry. Runs after every render
+  // but is a no-op unless the panel is open and out of sync, so it
+  // doesn't fight the user mid-edit of the picker itself.
+  function syncFileSelectsToTreeSelection() {
+    if (!filePanel || filePanel.hidden) return;
+    const subId = state.selectedSubEnquiryId;
+    if (!subId || !state.subEnquiries[subId]) return;
+    if (fileSubSel.value === subId) return; // already in sync
+    applySelectedChainToFileSelects();
   }
 
   // ============================================================
