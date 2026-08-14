@@ -8,7 +8,9 @@
 
    Commands so far:
      /help       — list what Sherpa can do
-     /duplicate  — search-and-pick a Sub-Enquiry to copy
+     /duplicate  — search-and-pick a Sub-Enquiry to copy (name only,
+                   by default — see "Duplicate (all contents)" below
+                   for keywords/templates/labels too)
 
    Anything else gets a friendly-but-robotic non-answer, which
    is deliberate: Sherpa is upfront about only knowing two
@@ -222,7 +224,7 @@
       onPick: (entry) => {
         const newId = draftApi.duplicateSubEnquiry(entry.id);
         if (newId) {
-          addMessage('Duplicate complete \u2014 "' + entry.name + '" is copied and open in the Draft tab.', 'bot');
+          addMessage('Duplicate complete \u2014 a blank copy of "' + entry.name + '" (name only) is open in the Draft tab. Need the keywords/templates/labels too? Use the + bullet in the tree and pick "Duplicate (all contents)".', 'bot');
         } else {
           addMessage('That one\u2019s gone missing \u2014 try /duplicate again to refresh the list.', 'bot');
         }
@@ -261,9 +263,12 @@
 
   // ============================================================
   // + bullet on a Sub-Enquiry in the tree — drops it into the chat
-  // as a context card, followed by Duplicate / Move / Duplicate then
-  // Move actions. Entry point is window.Summit.bot.sendSubEnquiry,
-  // called from draft.js's onSend handler (Section 5.2).
+  // as a context card, followed by Duplicate / Duplicate (all
+  // contents) / Move / Duplicate then Move actions. "Duplicate" alone
+  // copies just the name; "Duplicate (all contents)" also copies
+  // keywords/templates/labels. Entry point is
+  // window.Summit.bot.sendSubEnquiry, called from draft.js's onSend
+  // handler (Section 5.2).
   // ============================================================
 
   function renderSubEnquiryActions(subId, name, path) {
@@ -301,7 +306,16 @@
     actionsBubble.appendChild(makeActionBtn('Duplicate', () => {
       const newId = draftApi.duplicateSubEnquiry(subId);
       if (newId) {
-        addMessage('Duplicate complete \u2014 "' + name + '" is copied and open in the Draft tab.', 'bot');
+        addMessage('Duplicate complete \u2014 a blank copy of "' + name + '" (name only) is open in the Draft tab.', 'bot');
+      } else {
+        addMessage('That one\u2019s gone missing \u2014 try again from the tree.', 'bot');
+      }
+    }));
+
+    actionsBubble.appendChild(makeActionBtn('Duplicate (all contents)', () => {
+      const newId = draftApi.duplicateSubEnquiry(subId, { withContents: true });
+      if (newId) {
+        addMessage('Duplicate complete \u2014 "' + name + '" is copied with its keywords, templates, and labels, and is open in the Draft tab.', 'bot');
       } else {
         addMessage('That one\u2019s gone missing \u2014 try again from the tree.', 'bot');
       }
@@ -327,8 +341,8 @@
 
   const HELP_TEXT =
     'Here\u2019s what I can do so far:\n' +
-    '\u2022 /duplicate \u2014 search for a Sub-Enquiry and make a copy of it\n' +
-    '\u2022 Hover the dot beside any Sub-Enquiry in the tree and click the + that appears \u2014 I\u2019ll offer to Duplicate, Move, or Duplicate then Move it\n' +
+    '\u2022 /duplicate \u2014 search for a Sub-Enquiry and make a blank copy of it (name only)\n' +
+    '\u2022 Hover the dot beside any Sub-Enquiry in the tree and click the + that appears \u2014 I\u2019ll offer to Duplicate (name only), Duplicate (all contents), Move, or Duplicate then Move it\n' +
     '\u2022 /help \u2014 show this list\n' +
     'More commands are on the way as I learn the trail.';
 

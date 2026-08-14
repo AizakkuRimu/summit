@@ -5319,11 +5319,15 @@
       return true;
     },
 
-    // Duplicates a Sub-Enquiry in place (same Enquiry parent), copying
-    // its keywords/template/label. Returns the new id, or null if the
-    // source no longer exists. Refreshes the tree/detail so the copy
-    // is visible immediately, whichever tab is showing.
-    duplicateSubEnquiry(id) {
+    // Duplicates a Sub-Enquiry in place (same Enquiry parent). By
+    // default this is a bare copy: only the name carries over (as
+    // "X (Copy)"), with empty keywords/templates/labels — same shape
+    // as a freshly created Sub-Enquiry. Pass { withContents: true } to
+    // also copy its keywords/templates/labels. Returns the new id, or
+    // null if the source no longer exists. Refreshes the tree/detail
+    // so the copy is visible immediately, whichever tab is showing.
+    duplicateSubEnquiry(id, options) {
+      const withContents = !!(options && options.withContents);
       const source = state.subEnquiries[id];
       if (!source) return null;
       const newId = uid('subenquiry');
@@ -5336,16 +5340,16 @@
         id: newId,
         name,
         enquiryId: source.enquiryId,
-        keywords: (source.keywords || []).slice(),
-        templates: subTemplates(source).map((t) => ({
+        keywords: withContents ? (source.keywords || []).slice() : [],
+        templates: withContents ? subTemplates(source).map((t) => ({
           id: uid('tpl'),
           name: t.name,
           template: t.template || '',
           templateHtml: t.templateHtml || '',
           templateLinks: (t.templateLinks || []).map((l) => ({ text: l.text, url: l.url })),
           keywords: (t.keywords || []).slice()
-        })),
-        labels: subLabels(source).slice()
+        })) : [],
+        labels: withContents ? subLabels(source).slice() : []
       };
       enq.subEnquiryIds.push(newId);
       const sourceIndex = enq.subEnquiryIds.indexOf(id);
@@ -5353,7 +5357,7 @@
         enq.subEnquiryIds.splice(enq.subEnquiryIds.indexOf(newId), 1);
         enq.subEnquiryIds.splice(sourceIndex + 1, 0, newId);
       }
-      showToast('Duplicated "' + name + '"');
+      showToast(withContents ? 'Duplicated "' + name + '" with all contents' : 'Duplicated "' + name + '"');
       window.Summit.draft.focusSubEnquiry(newId);
       return newId;
     },
