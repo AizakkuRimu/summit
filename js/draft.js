@@ -2774,10 +2774,19 @@
     return repl;
   }
 
+  // Word/Outlook's clipboard HTML always carries one of these markers.
+  // Gating normalizeWordPasteArtifacts on it means its "a lone <br> is
+  // really just a Word line-wrap" cleanup only touches genuine Word
+  // paste. Without this, pasting *any* content that legitimately uses
+  // one <br> per line — including a template copied out of this very
+  // editor, or out of Mountain — had every line break collapsed into a
+  // single space, which is what was causing lines to run together.
+  const WORD_HTML_SIGNATURE = /mso-|urn:schemas-microsoft-com:office|\bMsoNormal\b/i;
+
   function htmlToTemplateFragment(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const blockSelector = 'p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote';
-    normalizeWordPasteArtifacts(doc.body);
+    if (WORD_HTML_SIGNATURE.test(html)) normalizeWordPasteArtifacts(doc.body);
     collapseInsignificantWhitespace(doc.body);
     trimBlockEdgeWhitespace(doc.body, blockSelector);
 

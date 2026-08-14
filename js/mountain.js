@@ -251,7 +251,10 @@
     // Captured before the DOM actually mutates, so it's a true "before"
     // snapshot — only takes effect at the start of a burst (see
     // noteHistoryBefore).
-    body.addEventListener('beforeinput', () => noteHistoryBefore());
+    body.addEventListener('beforeinput', (e) => {
+      noteHistoryBefore();
+      handleCrossPageBeforeInput(e);
+    });
     body.addEventListener('input', () => {
       updateEmptyState(body);
       schedulePagination();
@@ -276,10 +279,178 @@
         return;
       }
       if (isPasteMatchStyleShortcut(e)) pasteMatchStyleArmed = true;
+
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        selectEntireDocument();
+        return;
+      }
+
+      if ((e.key === 'Backspace' || e.key === 'Delete') && !mod) {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount && !sel.isCollapsed) {
+          const range = sel.getRangeAt(0);
+          if (inMountain(range.commonAncestorContainer) && selectionSpansMultiplePages(range)) {
+            e.preventDefault();
+            noteHistoryBefore();
+            collapseSelectionAcrossPages(sel, range);
+            schedulePagination();
+            noteHistoryAfter();
+          }
+        }
+      }
     });
     body.addEventListener('focus', () => {
       activeBody = body;
     });
+  }
+
+  // ============================================================
+  // Cross-page selection, Ctrl+A, and edits over a cross-page
+  // selection (Section 2.1b)
+  //
+  // Each page body is its own contenteditable region — that's what
+  // lets the pagination engine move whole paragraphs between page
+  // divs with plain DOM calls. The trade-off is that a browser's own
+  // click-and-drag selection, and its own Ctrl+A/Backspace handling,
+  // normally stay confined to a single contenteditable root. The
+  // pieces below make selection, "select all", copy, and delete treat
+  // #mountain-pages as one continuous document instead, which is what
+  // actually lets text flow, get selected, and get edited across a
+  // page break the way it does in Word.
+  // ============================================================
+
+  function caretFromPoint(x, y) {
+    if (document.caretRangeFromPoint) {
+      const r = document.caretRangeFromPoint(x, y);
+      return r ? { node: r.startContainer, offset: r.startOffset } : null;
+    }
+    if (document.caretPositionFromPoint) {
+      const p = document.caretPositionFromPoint(x, y);
+      return p ? { node: p.offsetNode, offset: p.offset } : null;
+    }
+    return null;
+  }
+
+  let dragAnchor = null;
+  let isDragSelecting = false;
+
+  pagesContainer.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest('a')) return; // let link clicks behave normally
+    const pos = caretFromPoint(e.clientX, e.clientY);
+    dragAnchor = pos;
+    isDragSelecting = false;
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!dragAnchor) return;
+    if (e.buttons !== 1) { dragAnchor = null; isDragSelecting = false; return; }
+    const pos = caretFromPoint(e.clientX, e.clientY);
+    if (!pos) return;
+    isDragSelecting = true;
+    const sel = window.getSelection();
+    try {
+      sel.setBaseAndExtent(dragAnchor.node, dragAnchor.offset, pos.node, pos.offset);
+      e.preventDefault();
+    } catch (err) {
+      // Anchor node went stale (e.g. a repagination pass moved it mid-drag).
+      dragAnchor = pos;
+    }
+  });
+
+  document.addEventListener('mouseup', () => {
+    dragAnchor = null;
+    isDragSelecting = false;
+  });
+
+  function selectionSpansMultiplePages(range) {
+    const startPage = pages.find((p) => p.body.contains(range.startContainer));
+    const endPage = pages.find((p) => p.body.contains(range.endContainer));
+    return !!(startPage && endPage && startPage !== endPage);
+  }
+
+  function selectEntireDocument() {
+    if (!pages.length) return;
+    const firstBody = pages[0].body;
+    const lastBody = pages[pages.length - 1].body;
+    const range = document.createRange();
+    range.setStart(firstBody, 0);
+    range.setEnd(lastBody, lastBody.childNodes.length);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  // Deletes a selection that spans two or more page bodies. This uses
+  // plain Range.deleteContents() rather than execCommand('delete', ...)
+  // because execCommand only ever acts within the currently-focused
+  // contenteditable — it can't reach across into a different page's
+  // body — while Range operations work on the DOM directly regardless
+  // of which element happens to be focused.
+  function deleteRangeAcrossPages(range) {
+    const startContainer = range.startContainer;
+    const startOffset = range.startOffset;
+    range.deleteContents();
+    pages.forEach((p) => {
+      if (!p.body.firstElementChild) {
+        const el = document.createElement('p');
+        el.appendChild(document.createElement('br'));
+        p.body.appendChild(el);
+      }
+    });
+    return { node: startContainer, offset: startOffset };
+  }
+
+  function collapseSelectionAcrossPages(sel, range) {
+    const landed = deleteRangeAcrossPages(range);
+    try {
+      const collapsed = document.createRange();
+      collapsed.setStart(landed.node, landed.offset);
+      collapsed.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(collapsed);
+    } catch (err) { /* the anchor was itself removed; leave selection as-is */ }
+  }
+
+  // Typing, pasting, or pressing Enter over a selection that spans two
+  // page bodies needs the same manual-delete treatment as Backspace/
+  // Delete above, since the browser's own "replace selection" behaviour
+  // for beforeinput is likewise confined to one contenteditable root.
+  const CROSS_PAGE_INPUT_TYPES = new Set([
+    'insertText', 'insertReplacementText', 'insertParagraph', 'insertLineBreak',
+    'deleteContentBackward', 'deleteContentForward', 'deleteWordBackward',
+    'deleteWordForward', 'deleteSoftLineBackward', 'deleteSoftLineForward'
+  ]);
+
+  function handleCrossPageBeforeInput(e) {
+    if (!CROSS_PAGE_INPUT_TYPES.has(e.inputType)) return;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || sel.isCollapsed) return;
+    const range = sel.getRangeAt(0);
+    if (!inMountain(range.commonAncestorContainer) || !selectionSpansMultiplePages(range)) return;
+
+    e.preventDefault();
+    const landed = deleteRangeAcrossPages(range);
+    try {
+      const collapsed = document.createRange();
+      collapsed.setStart(landed.node, landed.offset);
+      collapsed.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(collapsed);
+    } catch (err) { /* fall through without re-inserting */ return; }
+
+    if (e.inputType === 'insertText' && e.data) {
+      document.execCommand('insertText', false, e.data);
+    } else if (e.inputType === 'insertReplacementText' && e.dataTransfer) {
+      document.execCommand('insertText', false, e.dataTransfer.getData('text/plain'));
+    } else if (e.inputType === 'insertParagraph') {
+      document.execCommand('insertParagraph', false, null);
+    } else if (e.inputType === 'insertLineBreak') {
+      document.execCommand('insertLineBreak', false, null);
+    }
+    schedulePagination();
   }
 
   function updateEmptyState(body) {
@@ -321,6 +492,14 @@
           nextBody.insertBefore(body.lastElementChild, nextBody.firstChild);
           changed = true;
         }
+        // A single paragraph (or the last one after the loop above) can
+        // still be taller than the whole page on its own — split it at
+        // the line where the page runs out of room instead of letting
+        // it overflow past the margin.
+        if (body.scrollHeight > body.clientHeight + 1) {
+          const nextBody = ensurePage(i + 1).body;
+          if (trySplitLastParagraph(body, nextBody)) changed = true;
+        }
       }
 
       // 2. Pull content back from the next page while there's room (reflow on delete).
@@ -329,6 +508,30 @@
         const nextBody = pages[i + 1].body;
         while (nextBody.firstElementChild) {
           const node = nextBody.firstElementChild;
+          const prev = body.lastElementChild;
+          const isContinuation = continuationParagraphs.has(node);
+
+          if (isContinuation && prev && prev.tagName === node.tagName) {
+            // This paragraph only exists because its source paragraph
+            // was split across this page boundary — merge it back into
+            // that paragraph rather than appending it as a new one, so
+            // a shrink-edit doesn't leave a stray extra paragraph break
+            // behind. If it still doesn't fit, trySplitLastParagraph
+            // below finds the (now possibly different) break point
+            // again instead of us guessing.
+            if (prev.childNodes.length === 1 && prev.firstChild.nodeType === 1 && prev.firstChild.tagName === 'BR') prev.innerHTML = '';
+            if (prev.lastChild) prev.appendChild(document.createTextNode(' '));
+            while (node.firstChild) prev.appendChild(node.firstChild);
+            nextBody.removeChild(node);
+            prev.normalize();
+            changed = true;
+            if (body.scrollHeight > body.clientHeight + 1) {
+              trySplitLastParagraph(body, nextBody);
+              break;
+            }
+            continue;
+          }
+
           body.appendChild(node);
           if (body.scrollHeight > body.clientHeight + 1) {
             nextBody.insertBefore(node, nextBody.firstChild);
@@ -397,6 +600,137 @@
     pages.forEach((page, i) => {
       page.numberEl.textContent = (i + 1) + ' / ' + pages.length;
     });
+  }
+
+  // ============================================================
+  // Mid-paragraph splitting (Section 2.1a)
+  //
+  // The push/pull passes above move whole block elements (a <p>, an
+  // <li>...) between pages. That's fine as long as no single paragraph
+  // is taller than the space left on a page — but when one is (a long
+  // paragraph, or simply the tail end of a page), there was previously
+  // nothing to push it onto the next page WITHOUT leaving the page
+  // empty, so it just sat there and visually overflowed past the page
+  // margin, clipped by the page body's `overflow: hidden`. That's the
+  // "overlapping/cut-off bottom line" behaviour.
+  //
+  // trySplitLastParagraph fixes this the way Word/Google Docs do: it
+  // finds the exact point inside the paragraph's text where the page
+  // runs out of room and physically splits the paragraph there, moving
+  // the remainder onto the next page as a "continuation" paragraph
+  // (tracked in continuationParagraphs so a later shrink-edit can
+  // re-merge it — see the pull-back pass in repaginate()).
+  // ============================================================
+
+  // Tracks paragraphs that only exist because a longer paragraph was
+  // split across a page boundary, so the pull-back pass can re-merge
+  // them into their source paragraph once things shrink and everything
+  // fits back on one page. A WeakSet (rather than a data-attribute)
+  // so this bookkeeping never leaks into saved/exported/copied HTML.
+  const continuationParagraphs = new WeakSet();
+
+  function collectTextNodes(el) {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let n;
+    while ((n = walker.nextNode())) nodes.push(n);
+    return nodes;
+  }
+
+  // Attempts to relieve an overflowing page by splitting its last
+  // paragraph/div at the line where the page's available height runs
+  // out, moving the remainder onto nextBody as a new paragraph. Falls
+  // back to moving the whole block over if not even its first line
+  // fits. Returns true if it changed anything.
+  function trySplitLastParagraph(body, nextBody) {
+    const last = body.lastElementChild;
+    if (!last || (last.tagName !== 'P' && last.tagName !== 'DIV')) return false;
+    // Lists, tables, and images aren't (yet) safe to cut mid-element —
+    // leave those to the whole-block push/pull passes.
+    if (last.querySelector('ul, ol, table, img')) return false;
+
+    const textNodes = collectTextNodes(last);
+    if (!textNodes.length) return false;
+    const lengths = textNodes.map((n) => n.data.length);
+    const total = lengths.reduce((a, b) => a + b, 0);
+    if (total === 0) return false;
+
+    function offsetToNode(globalOffset) {
+      let remaining = globalOffset;
+      for (let i = 0; i < textNodes.length; i++) {
+        if (remaining <= lengths[i]) return { node: textNodes[i], offset: remaining };
+        remaining -= lengths[i];
+      }
+      const li = textNodes.length - 1;
+      return { node: textNodes[li], offset: lengths[li] };
+    }
+
+    const bodyRect = body.getBoundingClientRect();
+    const availableBottom = bodyRect.top + body.clientHeight;
+
+    function bottomAt(globalOffset) {
+      if (globalOffset <= 0) {
+        const r = document.createRange();
+        r.setStart(last, 0);
+        r.collapse(true);
+        const rect = r.getBoundingClientRect();
+        return rect.bottom || last.getBoundingClientRect().top;
+      }
+      const { node, offset } = offsetToNode(globalOffset);
+      const r = document.createRange();
+      r.setStart(last, 0);
+      r.setEnd(node, offset);
+      const rects = r.getClientRects();
+      return rects.length ? rects[rects.length - 1].bottom : last.getBoundingClientRect().bottom;
+    }
+
+    // Not even the first character fits (the page is already full of
+    // other content) — move the whole paragraph forward instead.
+    if (bottomAt(1) > availableBottom) {
+      nextBody.insertBefore(last, nextBody.firstChild);
+      return true;
+    }
+    if (bottomAt(total) <= availableBottom) return false; // fits after all
+
+    let lo = 0;
+    let hi = total;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (bottomAt(mid) <= availableBottom) lo = mid; else hi = mid;
+    }
+
+    // Snap back to the previous word boundary so the break lands
+    // between words rather than mid-word, the way Word wraps text.
+    const flatText = textNodes.map((n) => n.data).join('');
+    let snapped = lo;
+    const windowStart = Math.max(0, lo - 120);
+    const idx = flatText.lastIndexOf(' ', lo - 1);
+    if (idx >= windowStart && idx >= 0) snapped = idx + 1;
+    if (snapped <= 0) snapped = lo;
+
+    const { node, offset } = offsetToNode(snapped);
+    const range = document.createRange();
+    range.setStart(node, offset);
+    range.setEndAfter(last.lastChild);
+    const tailFrag = range.extractContents();
+
+    // Trim the leading space left behind by the word-boundary snap.
+    const firstText = collectTextNodes(tailFrag)[0];
+    if (firstText) firstText.data = firstText.data.replace(/^ /, '');
+
+    if (!tailFrag.firstChild) return false; // nothing left to move — treat as fitting
+
+    const continuation = document.createElement(last.tagName);
+    if (last.className) continuation.className = last.className;
+    continuation.appendChild(tailFrag);
+    continuationParagraphs.add(continuation);
+
+    nextBody.insertBefore(continuation, nextBody.firstChild);
+
+    if (!last.firstChild || last.textContent.trim() === '') {
+      last.appendChild(document.createElement('br'));
+    }
+    return true;
   }
 
   // ============================================================
@@ -971,10 +1305,68 @@
     });
   }
 
+  // Word/Outlook's clipboard HTML always carries one of these markers
+  // (the mso- prefixed styles/classes, or the Office XML namespace
+  // declared on the document). Gating normalizeWordPasteArtifacts on
+  // this means its "a lone <br> is really just a Word line-wrap"
+  // heuristic only ever touches genuine Word paste — not, say, a
+  // template copied out of Draft (which legitimately uses one <br>
+  // per line), which was previously having every one of those line
+  // breaks collapsed into a single space by this same pass.
+  const WORD_HTML_SIGNATURE = /mso-|urn:schemas-microsoft-com:office|\bMsoNormal\b/i;
+
+  // A page body's pagination logic (repaginate, above) moves whole
+  // top-level *elements* between pages, so it needs every top-level
+  // child to be a block (a <p>, <ul>, ...). Pasted content that isn't
+  // wrapped in a block at all — e.g. Draft's templates, which are
+  // just text + <br> + <a>/<b>/<i>/<u> with no wrapping <p> — would
+  // otherwise land as loose text/inline nodes directly under the page
+  // body. Besides being invalid for a contenteditable's block model,
+  // that breaks pagination outright: `body.lastElementChild` would
+  // pick out a bare <br> instead of a paragraph, so push/pull moves
+  // individual line breaks between pages instead of whole paragraphs,
+  // stranding their text — which is what "everything clumps together"
+  // turned out to actually be. Wrapping any run of loose top-level
+  // inline content in its own <p> keeps it inside the block model
+  // pagination expects, with its <br>s intact as ordinary line breaks
+  // inside that one paragraph.
+  const BLOCK_TAGS = new Set(['P', 'DIV', 'UL', 'OL', 'LI', 'TABLE', 'TR', 'TD', 'TH', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE']);
+
+  function wrapLooseInlineContent(root) {
+    const kids = Array.from(root.childNodes);
+    let i = 0;
+    while (i < kids.length) {
+      const node = kids[i];
+      const isBlock = node.nodeType === 1 && BLOCK_TAGS.has(node.tagName);
+      if (isBlock) { i++; continue; }
+
+      const run = [node];
+      let j = i + 1;
+      while (j < kids.length) {
+        const n = kids[j];
+        const nb = n.nodeType === 1 && BLOCK_TAGS.has(n.tagName);
+        if (nb) break;
+        run.push(n);
+        j++;
+      }
+
+      const hasContent = run.some((n) => n.nodeType === 1 || (n.nodeValue || '').trim() !== '');
+      if (hasContent) {
+        const p = document.createElement('p');
+        root.insertBefore(p, run[0]);
+        run.forEach((n) => p.appendChild(n));
+      } else {
+        run.forEach((n) => n.remove());
+      }
+      i = j;
+    }
+  }
+
   function sanitizeHTML(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    normalizeWordPasteArtifacts(doc.body);
+    if (WORD_HTML_SIGNATURE.test(html)) normalizeWordPasteArtifacts(doc.body);
     cleanNode(doc.body);
+    wrapLooseInlineContent(doc.body);
     return doc.body.innerHTML;
   }
 
@@ -1080,8 +1472,9 @@
 
   function matchPageFormatting(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    normalizeWordPasteArtifacts(doc.body);
+    if (WORD_HTML_SIGNATURE.test(html)) normalizeWordPasteArtifacts(doc.body);
     stripToPageFormatting(doc.body);
+    wrapLooseInlineContent(doc.body);
     return doc.body.innerHTML;
   }
 
@@ -1329,7 +1722,16 @@
     e.clipboardData.setData('text/plain', wrapperToPlainText(wrapper));
     e.preventDefault();
 
-    if (e.type === 'cut') recordHistoryStep(() => document.execCommand('delete', false, null));
+    if (e.type === 'cut') {
+      recordHistoryStep(() => {
+        if (selectionSpansMultiplePages(range)) {
+          collapseSelectionAcrossPages(sel, range);
+        } else {
+          document.execCommand('delete', false, null);
+        }
+      });
+      schedulePagination();
+    }
   }
 
   // ============================================================
