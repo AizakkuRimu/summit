@@ -2696,6 +2696,42 @@
     }).join('');
   }
 
+  // Clipboard-only variant of templateToHtml. The editor's own model
+  // (and templateToHtml above) is deliberately flat — every line,
+  // bulleted or not, is inline text separated by <br> (see
+  // wireRichTextEditing's comment on why). That's fine for rendering
+  // inside this editor and for pasting into Mountain, which parses
+  // this app's own flat model correctly. But a run of <br>-only lines
+  // with no paragraph boundary reads as ONE paragraph to Word — so a
+  // copied bullet list lands in Word as a single bullet holding every
+  // line's text, instead of one bullet per line, because Word's
+  // list-autoformat only fires per-paragraph. Wrapping each line in
+  // its own <div> for the clipboard gives Word (and anything else) a
+  // real paragraph break to key off, while still rendering identically
+  // everywhere the flat version already worked. Only used at copy
+  // time — never fed back into the editor or into storage.
+  function templateToClipboardHtml(tpl) {
+    const segments = templateSegments(tpl);
+    const lines = [[]];
+    segments.forEach((seg) => {
+      if (seg.type === 'text' && seg.value === '\n') { lines.push([]); return; }
+      lines[lines.length - 1].push(seg);
+    });
+    return lines.map((lineSegs) => {
+      if (lineSegs.length === 0) return '<div><br></div>';
+      const inner = lineSegs.map((seg) => {
+        let segHtml = seg.type === 'link'
+          ? '<a href="' + escapeHtmlLocal(seg.url) + '" target="_blank" rel="noopener">' + escapeHtmlLocal(seg.text) + '</a>'
+          : escapeHtmlLocal(seg.value).replace(/\n/g, '<br>');
+        if (seg.bold) segHtml = '<b>' + segHtml + '</b>';
+        if (seg.italic) segHtml = '<i>' + segHtml + '</i>';
+        if (seg.underline) segHtml = '<u>' + segHtml + '</u>';
+        return segHtml;
+      }).join('');
+      return '<div>' + inner + '</div>';
+    }).join('');
+  }
+
   function renderTemplateIntoEditor(tpl) {
     templateInput.innerHTML = tpl ? (tpl.templateHtml ? tpl.templateHtml : (tpl.template ? templateToHtml(tpl) : '')) : '';
   }
@@ -3330,7 +3366,7 @@
     const plain = (tpl && tpl.template) || '';
     if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
       try {
-        const html = templateToHtml(tpl);
+        const html = templateToClipboardHtml(tpl);
         const item = new ClipboardItem({
           'text/html': new Blob([html], { type: 'text/html' }),
           'text/plain': new Blob([plain], { type: 'text/plain' })
@@ -4508,7 +4544,10 @@
         (sub.keywords.length ? '<p><em>Keywords: ' + escapeHtmlLocal(sub.keywords.join(', ')) + '</em></p>' : '') +
         ((tpl.keywords || []).length ? '<p><em>Template keywords: ' + escapeHtmlLocal(tpl.keywords.join(', ')) + '</em></p>' : '') +
         (labels.length ? '<p><em>Tags: ' + escapeHtmlLocal(labels.map((l) => '#' + l).join(' ')) + '</em></p>' : '') +
-        '<p>' + templateToHtml(tpl) + '</p>';
+        // One <div> per line (not a single flat <p>) so a bulleted
+        // list survives as one bullet per line once opened in Word —
+        // see templateToClipboardHtml above for why.
+        templateToClipboardHtml(tpl);
     }).join('');
     downloadTextBlob(window.htmlDocx.asBlob(draftHtmlDocument(body)), 'draft-templates-' + draftTimestamp() + '.docx');
   });
