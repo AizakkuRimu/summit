@@ -349,6 +349,26 @@
     if (e.buttons !== 1) { dragAnchor = null; isDragSelecting = false; return; }
     const pos = caretFromPoint(e.clientX, e.clientY);
     if (!pos) return;
+
+    // Only step in once the drag actually needs to cross a page
+    // boundary. Each page body is its own contenteditable region, so
+    // the browser already handles an in-page drag itself — including
+    // preserving double-/triple-click word/line selection granularity
+    // (dragging after a double-click extends the selection one whole
+    // word at a time, snapped to word boundaries). Overriding the
+    // selection here unconditionally replaced that native word-drag
+    // behaviour with a raw character-precise range instead, anchored
+    // at the exact pixel of the original mousedown — which usually
+    // lands partway through the first word rather than at its start,
+    // so the whole highlighted selection reads as shifted right of
+    // where the word actually begins. Stepping aside for in-page
+    // drags leaves the browser's own (correct) behaviour in place;
+    // the character-precise range below only kicks in for the
+    // cross-page case it was actually written for.
+    const anchorPage = pages.find((p) => p.body.contains(dragAnchor.node));
+    const posPage = pages.find((p) => p.body.contains(pos.node));
+    if (anchorPage && posPage && anchorPage === posPage) return;
+
     isDragSelecting = true;
     const sel = window.getSelection();
     try {
