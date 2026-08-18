@@ -288,6 +288,11 @@
   outline: none;
 }
 
+/* No template selected/added yet — nothing for these tags to attach to. */
+.draft-tag-input__field:disabled {
+  opacity: 0.45;
+}
+
 .draft-tag-input .draft-chip {
   height: 24px;
 }
