@@ -28,11 +28,13 @@
   state.schemes = state.schemes || {};       // id -> { id, name, categoryIds: [] }
   state.categories = state.categories || {}; // id -> { id, name, schemeId, enquiryIds: [] }
   state.enquiries = state.enquiries || {};   // id -> { id, name, categoryId, subEnquiryIds: [] }
-  state.subEnquiries = state.subEnquiries || {}; // id -> { id, name, enquiryId, keywords: [], template: '' }
+  state.subEnquiries = state.subEnquiries || {}; // id -> { id, name, enquiryId, keywords: [], templates: [] }
+  // Each template on a Sub-Enquiry carries its own Name/Term tags:
+  // sub.templates = [{ id, name, template, templateHtml, templateLinks, keywords: [], labels: [] }].
   state.pendingKeywords = state.pendingKeywords || []; // current extract-session keyword list
   state.selectedSubEnquiryId = state.selectedSubEnquiryId || null;
   // Most-recent-first list of Name/Term labels actually saved against a
-  // Sub-Enquiry (see recordLabelUsage()) — used by the Quick Template
+  // template (see recordLabelUsage()) — used by the Quick Template
   // Adder to guess which two labels to pre-fill.
   state.recentLabels = state.recentLabels || [];
 
@@ -306,19 +308,19 @@
   }
   function createSubEnquiry(enquiryId, name) {
     const id = uid('subenquiry');
-    state.subEnquiries[id] = { id, name, enquiryId, keywords: [], templates: [], labels: [] };
+    state.subEnquiries[id] = { id, name, enquiryId, keywords: [], templates: [] };
     state.enquiries[enquiryId].subEnquiryIds.push(id);
     return id;
   }
 
-  // Defensive accessors — every Sub-Enquiry created through
-  // createSubEnquiry() already has these, but keep call sites safe
-  // regardless (e.g. objects rebuilt during import).
-  function subLabels(sub) { return (sub && sub.labels) || []; }
+  // Defensive accessor — every template built through subTemplates()
+  // already has a labels array, but keep call sites safe regardless
+  // (e.g. objects rebuilt during import).
+  function templateLabels(tpl) { return (tpl && tpl.labels) || []; }
 
   // ---------- Multiple templates per Sub-Enquiry ----------
   // Each Sub-Enquiry can carry any number of named templates:
-  // sub.templates = [{ id, name, template, templateHtml, templateLinks }].
+  // sub.templates = [{ id, name, template, templateHtml, templateLinks, keywords: [], labels: [] }].
   // Older saved state (or an import) may still only have the legacy
   // singular sub.template/templateHtml/templateLinks fields — subTemplates()
   // is the one place that reads them, migrating them into a single-entry
@@ -346,6 +348,16 @@
     // Defensive: templates created before per-template keywords existed
     // (or restored from an older save) may not have a keywords array yet.
     sub.templates.forEach((t) => { if (!t.keywords) t.keywords = []; });
+    // Migration: Name/Term tags used to live once on the Sub-Enquiry
+    // (sub.labels) and applied to every template under it. Any template
+    // that doesn't have its own labels array yet (older save, or an
+    // import written before this change) inherits a copy of whatever
+    // the Sub-Enquiry's shared tags were — safe because, before this
+    // change, every template effectively shared that one set anyway.
+    // A newly-created template with no legacy tags to inherit just
+    // starts blank, same as sub.labels being absent.
+    sub.templates.forEach((t) => { if (!t.labels) t.labels = (sub.labels || []).slice(); });
+    delete sub.labels;
     return sub.templates;
   }
   function findTemplateById(sub, templateId) {
@@ -1007,7 +1019,7 @@
     const templates = subTemplates(sub);
     const name = window.prompt('New template name:', 'Template ' + (templates.length + 1));
     if (!name || !name.trim()) { fileTemplateSel.value = ''; return; }
-    const tpl = { id: uid('tpl'), name: name.trim(), template: '', templateHtml: '', templateLinks: [], keywords: [] };
+    const tpl = { id: uid('tpl'), name: name.trim(), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
     templates.push(tpl);
     fillFileTemplateSelect(subId);
     fileTemplateSel.value = tpl.id;
@@ -1608,6 +1620,7 @@
       detailContent.hidden = true;
       activeTemplateId = null;
       if (detailKeywordsClearBtn) detailKeywordsClearBtn.disabled = true;
+      renderLabelChips([], false);
       return;
     }
     detailEmpty.hidden = true;
@@ -1642,9 +1655,9 @@
     }
     if (detailKeywordsClearBtn) detailKeywordsClearBtn.disabled = sub.keywords.length === 0;
 
-    renderLabelChips(subLabels(sub).slice());
-    renderTemplateList(sub);
+    renderTemplateList(sub); // normalizes activeTemplateId first, so...
     const tpl = findTemplateById(sub, activeTemplateId);
+    renderLabelChips(templateLabels(tpl).slice(), !!tpl); // ...this loads the right template's own tags
     renderTemplateIntoEditor(tpl);
     updateTemplateStatus(sub, tpl);
     renderTemplateKeywords(sub, tpl);
@@ -1791,6 +1804,7 @@
         renderTemplateIntoEditor(tpl);
         updateTemplateStatus(sub, tpl);
         renderTemplateKeywords(sub, tpl);
+        renderLabelChips(templateLabels(tpl).slice(), true);
       });
       label.addEventListener('dblclick', (e) => {
         e.stopPropagation();
@@ -1809,25 +1823,22 @@
   // Core removal logic shared by every place a template can be deleted
   // from (the Tag view's template tabs, and the Find & Search results
   // list / "View more" modal). Mutates sub.templates, keeps the tree
-  // badges and deep search index in sync, and auto-clears a
-  // Sub-Enquiry's hashtags/labels if that was its last remaining
-  // template — orphaned tags describing an empty Sub-Enquiry would
-  // otherwise linger in every label filter/badge with nothing behind
-  // them. Returns true if labels were cleared, so callers can mention
-  // it in their toast.
+  // badges and deep search index in sync. Since Name/Term tags now
+  // live on the template itself, deleting it takes its tags with it —
+  // returns true when the deleted template actually had any, so
+  // callers can mention it in their toast and refresh the label
+  // filter/datalist (which are built from what's left).
   function deleteTemplateCore(sub, tpl) {
     if (!tpl) return false;
+    const hadLabels = templateLabels(tpl).length > 0;
     sub.templates = subTemplates(sub).filter((t) => t.id !== tpl.id);
-    let labelsCleared = false;
-    if (subTemplates(sub).length === 0 && subLabels(sub).length > 0) {
-      sub.labels = [];
-      labelsCleared = true;
+    if (hadLabels) {
       refreshLabelDatalist();
       refreshFindLabelSelect();
     }
     renderTree(); // badge counts etc. stay in sync
     buildDeepIndex();
-    return labelsCleared;
+    return hadLabels;
   }
 
   // Shared by "Clear template" and each template tab's own \u00D7 —
@@ -1837,7 +1848,7 @@
   function deleteTemplate(sub, tpl) {
     if (!tpl) return;
     if (!window.confirm('Remove the template "' + (tpl.name || 'Untitled') + '" from "' + sub.name + '"?')) return;
-    const labelsCleared = deleteTemplateCore(sub, tpl);
+    const hadLabels = deleteTemplateCore(sub, tpl);
     if (activeTemplateId === tpl.id) {
       activeTemplateId = sub.templates.length ? sub.templates[0].id : null;
     }
@@ -1846,8 +1857,9 @@
     renderTemplateIntoEditor(nextTpl);
     updateTemplateStatus(sub, nextTpl);
     renderTemplateKeywords(sub, nextTpl);
+    renderLabelChips(templateLabels(nextTpl).slice(), !!nextTpl);
     showToast('Template removed from ' + sub.name +
-      (labelsCleared ? ' \u2014 its tags were cleared too (no templates left).' : ''));
+      (hadLabels ? ' \u2014 its Name/Term tags were removed with it.' : ''));
   }
 
   // Delete/rename entry points used by the Find & Search results list
@@ -1859,7 +1871,7 @@
     if (!tpl) return;
     if (!window.confirm('Remove the template "' + (tpl.name || 'Untitled') + '" from "' + sub.name + '"?')) return;
     const wasOpenInTagView = sub.id === state.selectedSubEnquiryId;
-    const labelsCleared = deleteTemplateCore(sub, tpl);
+    const hadLabels = deleteTemplateCore(sub, tpl);
     if (wasOpenInTagView && activeTemplateId === tpl.id) {
       activeTemplateId = sub.templates.length ? sub.templates[0].id : null;
       const nextTpl = findTemplateById(sub, activeTemplateId);
@@ -1867,9 +1879,10 @@
       renderTemplateIntoEditor(nextTpl);
       updateTemplateStatus(sub, nextTpl);
       renderTemplateKeywords(sub, nextTpl);
+      renderLabelChips(templateLabels(nextTpl).slice(), !!nextTpl);
     }
     showToast('Template removed from ' + sub.name +
-      (labelsCleared ? ' \u2014 its tags were cleared too (no templates left).' : ''));
+      (hadLabels ? ' \u2014 its Name/Term tags were removed with it.' : ''));
     rerender();
   }
 
@@ -1889,13 +1902,14 @@
       if (!subId) return;
       const sub = state.subEnquiries[subId];
       const templates = subTemplates(sub);
-      const tpl = { id: uid('tpl'), name: 'Template ' + (templates.length + 1), template: '', templateHtml: '', templateLinks: [], keywords: [] };
+      const tpl = { id: uid('tpl'), name: 'Template ' + (templates.length + 1), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
       templates.push(tpl);
       activeTemplateId = tpl.id;
       renderTemplateList(sub);
       renderTemplateIntoEditor(tpl);
       updateTemplateStatus(sub, tpl);
       renderTemplateKeywords(sub, tpl);
+      renderLabelChips(templateLabels(tpl).slice(), true);
       templateInput.focus();
     });
   }
@@ -2240,7 +2254,7 @@
     let tpl = templates.find((t) => !t.template || !t.template.trim());
     const createdNew = !tpl;
     if (!tpl) {
-      tpl = { id: uid('tpl'), name: 'Template ' + (templates.length + 1), template: '', templateHtml: '', templateLinks: [], keywords: [] };
+      tpl = { id: uid('tpl'), name: 'Template ' + (templates.length + 1), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
       templates.push(tpl);
     } else if (tpl.id === activeTemplateId) {
       // The empty slot is the one currently open in the editor — if it
@@ -2260,9 +2274,11 @@
 
     const recommended = recommendedLabels();
     if (recommended.length) {
-      const mergedLabels = subLabels(sub).slice();
+      const mergedLabels = templateLabels(tpl).slice();
       recommended.forEach((l) => { if (!mergedLabels.includes(l)) mergedLabels.push(l); });
-      renderLabelChips(mergedLabels);
+      renderLabelChips(mergedLabels, true);
+    } else {
+      renderLabelChips(templateLabels(tpl).slice(), true);
     }
 
     renderTemplateList(sub);
@@ -2280,23 +2296,32 @@
   }
 
   // ---------- Template Labellers ----------
-  // Every Sub-Enquiry can carry any number of free-text tags (a
-  // person's name, a recurring term, etc.) alongside its template —
-  // an extra axis of categorization independent of the
-  // Scheme/Category/Enquiry/Sub-Enquiry hierarchy. Persisted as
-  // sub.labels (array), and rides along with the existing
+  // Every template can carry any number of free-text tags (a person's
+  // name, a recurring term, etc.) — an extra axis of categorization
+  // independent of the Scheme/Category/Enquiry/Sub-Enquiry hierarchy,
+  // and independent of its siblings under the same Sub-Enquiry.
+  // Persisted as tpl.labels (array), and rides along with the existing
   // PATH:/KEYWORDS:/TEMPLATE: import/export format via a LABEL: line
   // (comma-separated — see Section 8 below).
   //
   // Editing happens against a transient `pendingLabels` array — like
-  // the Template textarea, changes only land on the Sub-Enquiry when
-  // "Save template" is clicked, so a half-typed tag or an accidental
-  // removal can still be abandoned by switching Sub-Enquiries.
+  // the Template textarea, changes only land on the active template
+  // when "Save template" is clicked, so a half-typed tag or an
+  // accidental removal can still be abandoned by switching templates
+  // or Sub-Enquiries.
 
   let pendingLabels = [];
 
-  function renderLabelChips(labels) {
+  // `hasTemplate` (defaults true) toggles the input itself — there's
+  // nothing for a Name/Term tag to attach to until a template exists
+  // to save it against.
+  function renderLabelChips(labels, hasTemplate) {
     pendingLabels = labels;
+    if (labelInput) {
+      const enabled = hasTemplate !== false;
+      labelInput.disabled = !enabled;
+      labelInput.placeholder = enabled ? 'Type a tag, press Enter…' : 'Select or add a template first…';
+    }
     if (!labelTagsEl) return;
     labelTagsEl.querySelectorAll('.draft-chip').forEach((el) => el.remove());
     pendingLabels.forEach((tag) => {
@@ -2344,12 +2369,13 @@
 
   function allLabels() {
     const set = new Set();
-    Object.values(state.subEnquiries).forEach((s) => subLabels(s).forEach((l) => { if (l) set.add(l); }));
+    Object.values(state.subEnquiries).forEach((s) =>
+      subTemplates(s).forEach((t) => templateLabels(t).forEach((l) => { if (l) set.add(l); })));
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }
 
   // Bumps each of the given labels to the front of state.recentLabels
-  // (most-recent-first, deduped) — called whenever a Sub-Enquiry's
+  // (most-recent-first, deduped) — called whenever a template's
   // labels are actually saved. Powers the Quick Template Adder's
   // "two most recently used" guess.
   function recordLabelUsage(labels) {
@@ -2365,12 +2391,13 @@
 
   // The two labels the Quick Template Adder should pre-fill: the most
   // recently saved ones if there's any history, otherwise the two used
-  // on the most Sub-Enquiries overall.
+  // on the most templates overall.
   function recommendedLabels() {
     const recent = (state.recentLabels || []).filter(Boolean);
     if (recent.length) return recent.slice(0, 2);
     const counts = {};
-    Object.values(state.subEnquiries).forEach((s) => subLabels(s).forEach((l) => { if (l) counts[l] = (counts[l] || 0) + 1; }));
+    Object.values(state.subEnquiries).forEach((s) =>
+      subTemplates(s).forEach((t) => templateLabels(t).forEach((l) => { if (l) counts[l] = (counts[l] || 0) + 1; })));
     return Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 2);
   }
 
@@ -3045,7 +3072,7 @@
     if (!tpl) {
       // Nothing selected yet (fresh Sub-Enquiry) — Save creates the
       // first template slot rather than silently doing nothing.
-      tpl = { id: uid('tpl'), name: 'Template ' + (templates.length + 1), template: '', templateHtml: '', templateLinks: [], keywords: [] };
+      tpl = { id: uid('tpl'), name: 'Template ' + (templates.length + 1), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
       templates.push(tpl);
       activeTemplateId = tpl.id;
     }
@@ -3053,12 +3080,12 @@
     tpl.templateLinks = editorLinks();
     tpl.templateHtml = sanitizeEditorHtml();
     commitPendingLabelInput();
-    sub.labels = pendingLabels.slice();
-    recordLabelUsage(sub.labels);
+    tpl.labels = pendingLabels.slice();
+    recordLabelUsage(tpl.labels);
     renderTemplateList(sub);
     renderTemplateKeywords(sub, tpl);
     templateStatus.textContent = 'Saved \u2014 linked to ' + sub.name +
-      (sub.labels.length ? ' \u2014 tagged ' + sub.labels.map((l) => '#' + l).join(' ') + '.' : '.');
+      (tpl.labels.length ? ' \u2014 tagged ' + tpl.labels.map((l) => '#' + l).join(' ') + '.' : '.');
     templateStatus.classList.add('is-saved');
     renderTree(); // badge counts etc. stay in sync
     refreshLabelDatalist();
@@ -3219,14 +3246,14 @@
       if (filters.enquiryId && (!enq || enq.id !== filters.enquiryId)) return;
       if (filters.categoryId && (!cat || cat.id !== filters.categoryId)) return;
       if (filters.schemeId && (!scheme || scheme.id !== filters.schemeId)) return;
-      if (filters.label && !subLabels(sub).includes(filters.label)) return;
 
       // Template Finder surfaces one card per template, not per Sub-Enquiry.
       subTemplates(sub).forEach((tpl) => {
         if (!tpl.template) return;
+        if (filters.label && !templateLabels(tpl).includes(filters.label)) return;
         if (q) {
           const haystack = [scheme && scheme.name, cat && cat.name, enq && enq.name, sub.name, tpl.name,
-            effectiveTemplateKeywords(sub, tpl).join(' '), subLabels(sub).join(' '), tpl.template].filter(Boolean).join(' \u2022 ').toLowerCase();
+            effectiveTemplateKeywords(sub, tpl).join(' '), templateLabels(tpl).join(' '), tpl.template].filter(Boolean).join(' \u2022 ').toLowerCase();
           if (!haystack.includes(q)) return;
         }
         results.push({ sub, tpl, enq, cat, scheme });
@@ -3525,8 +3552,8 @@
 
   findViewMoreBtn.addEventListener('click', openViewMore);
 
-  function makeLabelBadge(sub) {
-    const labels = subLabels(sub);
+  function makeLabelBadge(tpl) {
+    const labels = templateLabels(tpl);
     if (!labels.length) return null;
     const wrap = document.createElement('div');
     wrap.className = 'draft-result__labels';
@@ -3552,7 +3579,7 @@
       (subTemplates(sub).length > 1 ? ' \u2014 ' + (tpl.name || 'Untitled') : '');
     card.appendChild(path);
 
-    const labelBadge = makeLabelBadge(sub);
+    const labelBadge = makeLabelBadge(tpl);
     if (labelBadge) card.appendChild(labelBadge);
 
     if (sub.keywords.length > 0) {
@@ -3881,9 +3908,6 @@
     header.appendChild(scoreBadge);
     card.appendChild(header);
 
-    const labelBadge = makeLabelBadge(sub);
-    if (labelBadge) card.appendChild(labelBadge);
-
     if (sub.keywords.length > 0) {
       const kwWrap = document.createElement('div');
       kwWrap.className = 'draft-result__keywords';
@@ -3905,6 +3929,8 @@
           tplName.textContent = tpl.name || 'Untitled';
           block.appendChild(tplName);
         }
+        const labelBadge = makeLabelBadge(tpl);
+        if (labelBadge) block.appendChild(labelBadge);
         if ((tpl.keywords || []).length > 0) {
           const tplKwWrap = document.createElement('div');
           tplKwWrap.className = 'draft-result__keywords';
@@ -4423,8 +4449,11 @@
   // elsewhere) so import can split on it reliably. LABEL and LINKS are
   // each optional on import for backward compatibility with older
   // exports — a block missing either line leaves the existing value on
-  // that Sub-Enquiry untouched rather than blanking it. LABEL is
-  // comma-separated so it can carry any number of Name/Term tags.
+  // that template untouched rather than blanking it. LABEL is
+  // comma-separated so it can carry any number of Name/Term tags, and
+  // (like TEMPLATE_KEYWORDS) applies to this one template specifically —
+  // older exports wrote the same LABEL value into every block for a
+  // given Sub-Enquiry, which imports cleanly onto each template here too.
   // LINKS sits before TEMPLATE (not after) because TEMPLATE's own
   // regex reads everything to the end of the block, verbatim.
 
@@ -4448,7 +4477,7 @@
     const formatBlock = tpl.templateHtml ? 'FORMAT: ' + tpl.templateHtml + '\n' : '';
     return 'PATH: ' + path + '\n' +
       'KEYWORDS: ' + sub.keywords.join(', ') + '\n' +
-      'LABEL: ' + subLabels(sub).join(', ') + '\n' +
+      'LABEL: ' + templateLabels(tpl).join(', ') + '\n' +
       'TEMPLATE_NAME: ' + (tpl.name || '') + '\n' +
       'TEMPLATE_KEYWORDS: ' + (tpl.keywords || []).join(', ') + '\n' +
       linksBlock +
@@ -4538,7 +4567,7 @@
     if (!entries) return;
     if (!window.htmlDocx) { showToast('Document exporter not loaded.'); return; }
     const body = entries.map(({ sub, tpl }) => {
-      const labels = subLabels(sub);
+      const labels = templateLabels(tpl);
       const heading = pathForSubEnquiry(sub.id) + (entries.filter((e) => e.sub.id === sub.id).length > 1 ? ' \u2014 ' + (tpl.name || 'Untitled') : '');
       return '<h2>' + escapeHtmlLocal(heading) + '</h2>' +
         (sub.keywords.length ? '<p><em>Keywords: ' + escapeHtmlLocal(sub.keywords.join(', ')) + '</em></p>' : '') +
@@ -4747,7 +4776,6 @@
       const subId = findOrCreateSubEnquiry(enquiryId, subName);
       const sub = state.subEnquiries[subId];
       sub.keywords = entry.keywords;
-      if (entry.labels !== null) sub.labels = entry.labels;
 
       // Match an existing template by name when the export specified
       // one; a nameless (older, single-template) export instead updates
@@ -4758,7 +4786,7 @@
       let tpl = entry.templateName ? templates.find((t) => t.name === entry.templateName) : null;
       if (!tpl && !entry.templateName && templates.length === 1) tpl = templates[0];
       if (!tpl) {
-        tpl = { id: uid('tpl'), name: entry.templateName || ('Template ' + (templates.length + 1)), template: '', templateHtml: '', templateLinks: [], keywords: [] };
+        tpl = { id: uid('tpl'), name: entry.templateName || ('Template ' + (templates.length + 1)), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
         templates.push(tpl);
       } else if (entry.templateName) {
         tpl.name = entry.templateName;
@@ -4773,6 +4801,9 @@
       // TEMPLATE_KEYWORDS: line always sets this template's own
       // keywords (even to empty); no line at all keeps whatever it had.
       if (entry.templateKeywords !== null) tpl.keywords = entry.templateKeywords;
+      // LABEL: applies to this template specifically (see comment
+      // above entryBlock) — not specified leaves its tags untouched.
+      if (entry.labels !== null) tpl.labels = entry.labels;
       if (existed) updated += 1; else created += 1;
     });
     refreshLabelDatalist();
@@ -5386,9 +5417,9 @@
           template: t.template || '',
           templateHtml: t.templateHtml || '',
           templateLinks: (t.templateLinks || []).map((l) => ({ text: l.text, url: l.url })),
-          keywords: (t.keywords || []).slice()
-        })) : [],
-        labels: withContents ? subLabels(source).slice() : []
+          keywords: (t.keywords || []).slice(),
+          labels: (t.labels || []).slice()
+        })) : []
       };
       enq.subEnquiryIds.push(newId);
       const sourceIndex = enq.subEnquiryIds.indexOf(id);
