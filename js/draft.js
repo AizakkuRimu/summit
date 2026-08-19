@@ -2038,6 +2038,11 @@
         '</div>' +
         '<p class="draft-name-helper__hint" id="draft-quicktpl-target"></p>' +
         '<p class="draft-search-help">Paste the two-column block copied straight from your table \u2014 the member\u2019s enquiry, then a tab, then the reply. If the tab gets lost in the paste, this falls back to splitting at the 2nd \u201cDear\u201d. Bold, italics, underline and hyperlinks in the reply are kept when pasting from a table or Word.</p>' +
+        '<label class="draft-name-helper__check draft-quicktpl__ignoremid" for="draft-quicktpl-ignoremiddle">' +
+          '<input type="checkbox" id="draft-quicktpl-ignoremiddle" />' +
+          ' Ignore middle column' +
+        '</label>' +
+        '<p class="draft-search-help draft-quicktpl__ignoremid-hint">For a 3-column paste (enquiry, then a middle column, then the reply) \u2014 skips the middle column, treats the first column as the enquiry and the last as the reply. When the tab is lost, splits at the very last \u201cDear\u201d instead of the 2nd, since the middle column has one too.</p>' +
         '<textarea class="draft-textarea" id="draft-quicktpl-input" placeholder="Paste the raw enquiry + reply block here\u2026" aria-label="Raw enquiry and reply text to parse"></textarea>' +
         '<div class="summit-modal__actions">' +
           '<button type="button" class="summit-btn" data-quicktpl-close>Cancel</button>' +
@@ -2051,6 +2056,21 @@
     const inputEl = modal.querySelector('#draft-quicktpl-input');
     const applyBtn = modal.querySelector('#draft-quicktpl-apply-btn');
     const statusEl = modal.querySelector('#draft-quicktpl-status');
+    const ignoreMiddleEl = modal.querySelector('#draft-quicktpl-ignoremiddle');
+
+    // Sticks for the rest of the browser session (sessionStorage, not
+    // localStorage) — stays on across re-opens of this modal and page
+    // navigations within the tab, but resets once the browser/tab is
+    // actually closed, per how the toggle is meant to behave.
+    const IGNORE_MIDDLE_KEY = 'draft-quicktpl-ignore-middle';
+    try {
+      ignoreMiddleEl.checked = sessionStorage.getItem(IGNORE_MIDDLE_KEY) === '1';
+    } catch (err) { /* sessionStorage unavailable — default unchecked */ }
+    ignoreMiddleEl.addEventListener('change', () => {
+      try {
+        sessionStorage.setItem(IGNORE_MIDDLE_KEY, ignoreMiddleEl.checked ? '1' : '0');
+      } catch (err) { /* ignore — storage may be blocked */ }
+    });
 
     // Plain <textarea>s only ever receive the clipboard's text/plain
     // representation, so a straight paste has already lost any bold/
@@ -2085,7 +2105,7 @@
         statusEl.classList.remove('is-saved');
         return;
       }
-      const result = applyQuickTemplate(raw, quickTplEl._lastHtml);
+      const result = applyQuickTemplate(raw, quickTplEl._lastHtml, ignoreMiddleEl.checked);
       statusEl.textContent = result.message;
       statusEl.classList.toggle('is-saved', result.ok);
       if (result.ok) {
@@ -2104,6 +2124,7 @@
     quickTplEl._input = inputEl;
     quickTplEl._apply = applyBtn;
     quickTplEl._status = statusEl;
+    quickTplEl._ignoreMiddle = ignoreMiddleEl;
     quickTplEl._lastHtml = '';
     return modal;
   }
@@ -2141,27 +2162,27 @@
   // Splits a raw pasted block into { enquiryText, templateText }.
   // Primary rule: split at the first literal tab character (the
   // column boundary when copying a row straight out of a Word/Excel
-  // table). Fallback, for when a paste strips tabs: split right
-  // before the 2nd whole-word "Dear" in the text, since these table
-  // exports always start the enquiry with a greeting and the reply
-  // with a second one.
-  function parseQuickTemplateBlock(raw) {
+  // table) — or, with ignoreMiddle on and a 3rd column present (a 2nd
+  // tab), at the *last* tab instead, dropping whatever's between the
+  // first and last tab as the ignored middle column. Fallback, for
+  // when a paste strips tabs: split right before the 2nd whole-word
+  // "Dear" in the text (or the *last* "Dear" with ignoreMiddle on,
+  // since the middle column's own "Dear" would otherwise get
+  // mistaken for the reply's), since these table exports always
+  // start the enquiry with a greeting and the reply with another.
+  function parseQuickTemplateBlock(raw, ignoreMiddle) {
     const text = raw.replace(/\r\n/g, '\n');
     let enquiryPart;
     let replyPart;
     const tabIndex = text.indexOf('\t');
+    const lastTabIndex = text.lastIndexOf('\t');
     if (tabIndex !== -1) {
       enquiryPart = text.slice(0, tabIndex);
-      replyPart = text.slice(tabIndex + 1);
+      replyPart = ignoreMiddle && lastTabIndex !== tabIndex
+        ? text.slice(lastTabIndex + 1)
+        : text.slice(tabIndex + 1);
     } else {
-      const dearRe = /\bDear\b/g;
-      let match;
-      let count = 0;
-      let splitIndex = -1;
-      while ((match = dearRe.exec(text))) {
-        count += 1;
-        if (count === 2) { splitIndex = match.index; break; }
-      }
+      const splitIndex = findDearSplitIndex(text, ignoreMiddle);
       if (splitIndex === -1) return null;
       enquiryPart = text.slice(0, splitIndex);
       replyPart = text.slice(splitIndex);
@@ -2172,18 +2193,24 @@
     return { enquiryText: enquiryPart, templateText: replyPart };
   }
 
-  // Returns the innerHTML of the first two <td>/<th> cells of the
-  // first table row that has at least two of them, or null if the
-  // pasted HTML doesn't contain a table shaped like that. Checked
-  // separately from htmlToTemplateFragment because that function
-  // unwraps <table>/<tr>/<td> entirely with no separator between
-  // cells, so by the time it's run the column boundary that matters
-  // here is already gone.
-  function firstTwoTableCells(html) {
+  // Returns the innerHTML of the enquiry/reply <td>/<th> cells of the
+  // first table row shaped like that, or null if the pasted HTML
+  // doesn't contain a usable table. Normally that's the first two
+  // cells. With ignoreMiddle on and a 3rd (or later) column present,
+  // it's the first cell and the *last* cell instead, skipping
+  // whatever's in between. Checked separately from
+  // htmlToTemplateFragment because that function unwraps
+  // <table>/<tr>/<td> entirely with no separator between cells, so by
+  // the time it's run the column boundary that matters here is
+  // already gone.
+  function firstTwoTableCells(html, ignoreMiddle) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const rows = Array.from(doc.querySelectorAll('table tr'));
     for (const row of rows) {
       const cells = Array.from(row.querySelectorAll('td, th'));
+      if (ignoreMiddle && cells.length >= 3) {
+        return [cells[0].innerHTML, cells[cells.length - 1].innerHTML];
+      }
       if (cells.length >= 2) return [cells[0].innerHTML, cells[1].innerHTML];
     }
     return null;
@@ -2230,14 +2257,21 @@
     return null;
   }
 
-  function findSecondDearIndex(text) {
+  // Index of the 2nd whole-word "Dear" in text, or — with ignoreMiddle
+  // on, since a 3-column paste's middle column has a "Dear" of its
+  // own — the *last* whole-word "Dear" instead. Returns -1 if there
+  // aren't enough occurrences to split on.
+  function findDearSplitIndex(text, ignoreMiddle) {
     const dearRe = /\bDear\b/g;
     let match;
     let count = 0;
+    let lastIndex = -1;
     while ((match = dearRe.exec(text))) {
       count += 1;
-      if (count === 2) return match.index;
+      lastIndex = match.index;
+      if (!ignoreMiddle && count === 2) return match.index;
     }
+    if (ignoreMiddle && count >= 2) return lastIndex;
     return -1;
   }
 
@@ -2285,8 +2319,8 @@
   // fragment itself so the split lands on the right character.
   // Returns null if neither approach finds a usable split, so the
   // caller can fall back to the plain-text-only parse.
-  function parseQuickTemplateHtml(html) {
-    const tableCells = firstTwoTableCells(html);
+  function parseQuickTemplateHtml(html, ignoreMiddle) {
+    const tableCells = firstTwoTableCells(html, ignoreMiddle);
     if (tableCells) {
       const enquiryEl = document.createElement('div');
       enquiryEl.appendChild(htmlToTemplateFragment(tableCells[0]));
@@ -2296,14 +2330,14 @@
     }
 
     const fragment = htmlToTemplateFragment(html);
-    const splitIndex = findSecondDearIndex(flattenRawText(fragment));
+    const splitIndex = findDearSplitIndex(flattenRawText(fragment), ignoreMiddle);
     if (splitIndex === -1) return null;
 
     const { beforeEl, afterEl } = splitFragmentAtOffset(fragment, splitIndex);
     return { enquiryEl: beforeEl, replyEl: afterEl };
   }
 
-  function applyQuickTemplate(raw, html) {
+  function applyQuickTemplate(raw, html, ignoreMiddle) {
     const subId = state.selectedSubEnquiryId;
     const sub = subId ? state.subEnquiries[subId] : null;
     if (!sub) return { ok: false, message: 'Select a Sub-Enquiry in the Hierarchy first.' };
@@ -2313,7 +2347,7 @@
     let templateHtml = '';
     let templateLinks = [];
 
-    const htmlParsed = html ? parseQuickTemplateHtml(html) : null;
+    const htmlParsed = html ? parseQuickTemplateHtml(html, ignoreMiddle) : null;
     if (htmlParsed) {
       enquiryText = plainTextFromElement(htmlParsed.enquiryEl).trim();
       templateText = plainTextFromElement(htmlParsed.replyEl).trim();
@@ -2324,7 +2358,7 @@
     }
 
     if (!enquiryText || !templateText) {
-      const parsed = parseQuickTemplateBlock(raw);
+      const parsed = parseQuickTemplateBlock(raw, ignoreMiddle);
       if (!parsed) {
         return {
           ok: false,
