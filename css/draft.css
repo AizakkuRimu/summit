@@ -1355,12 +1355,24 @@
   flex-direction: column;
 }
 
+.draft-template-expand__panel .draft-search-help code {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  background: var(--stone-raised);
+  border: 1px solid var(--gray-line);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
 .draft-template-expand__input {
   flex: 1 1 auto;
   min-height: 0;
-  font-size: 15px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 14px;
   line-height: 1.6;
   padding: 18px 20px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
 }
 
 .draft-template-expand__toolbar {
