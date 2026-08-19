@@ -1311,6 +1311,42 @@
   margin-bottom: 0;
 }
 
+.draft-smartqp__panel {
+  max-width: 600px;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+.draft-smartqp__panel .draft-textarea {
+  min-height: 160px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12.5px;
+  margin-top: 4px;
+}
+
+#draft-smartqp-results {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.draft-smartqp__elsewhere {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--gray-line);
+}
+
+.draft-smartqp__elsewhere .draft-file-row {
+  margin-bottom: 10px;
+}
+
+.draft-smartqp__elsewhere .summit-select,
+.draft-smartqp__elsewhere .draft-search-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .draft-viewmore__panel {
   width: min(920px, 92vw);
   height: 88vh;
