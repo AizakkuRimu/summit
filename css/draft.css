@@ -794,17 +794,28 @@
 .draft-template-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   margin-top: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.draft-template-folder {
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--stone);
 }
 
 .draft-template-folder__label {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 10.5px;
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--gray);
-  margin: 0 0 4px;
+  color: var(--bronze-deep);
+  margin: 0 0 6px;
 }
 
 .draft-template-folder__chips {
