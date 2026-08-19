@@ -566,6 +566,10 @@
                 <input type="text" class="draft-tag-input__field" id="draft-template-keyword-input" placeholder="Type a keyword for this template, press Enter…" autocomplete="off">
               </div>
 
+              <div class="draft-col__subtitle-row">
+                <h3 class="draft-col__subtitle">Template text</h3>
+                <button type="button" class="draft-expand-btn" id="draft-template-expand-btn" title="Open a larger, full-screen editor for more precise editing">⤢ Expand to edit</button>
+              </div>
               <div id="draft-template-input" class="draft-textarea draft-textarea--template" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Template text for this Sub-Enquiry" data-placeholder="Paste or type the template text to attach to this Sub-Enquiry… (pasted hyperlinks stay clickable)"></div>
               <div class="draft-col__actions">
                 <button type="button" class="summit-btn summit-btn--primary" id="draft-template-save-btn">Save template</button>
@@ -810,6 +814,29 @@
         <button type="button" class="summit-btn" id="draft-hierarchy-copy-btn">Copy to clipboard</button>
       </div>
       <p class="draft-template-status" id="draft-hierarchy-io-status" aria-live="polite"></p>
+    </div>
+  </div>
+
+  <div class="summit-modal" id="draft-template-expand-modal" hidden aria-hidden="true">
+    <div class="summit-modal__backdrop" data-template-expand-close></div>
+    <div class="summit-modal__panel draft-template-expand__panel" role="dialog" aria-modal="true" aria-labelledby="draft-template-expand-title">
+      <div class="summit-modal__header">
+        <h2 class="summit-modal__title" id="draft-template-expand-title">Edit template</h2>
+        <button type="button" class="summit-modal__close" data-template-expand-close aria-label="Close">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><line x1="4" y1="4" x2="16" y2="16"/><line x1="16" y1="4" x2="4" y2="16"/></svg>
+        </button>
+      </div>
+      <p class="draft-search-help">A larger, uncluttered space for precise editing — bigger click targets and more room around every line. Click Apply to carry your changes back into the template box (still unsaved until you click Save template there).</p>
+      <div id="draft-template-expand-input" class="draft-textarea draft-textarea--template draft-template-expand__input" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Expanded template text editor"></div>
+      <div class="summit-modal__actions draft-template-expand__toolbar">
+        <button type="button" class="summit-btn" id="draft-template-expand-bold-btn" title="Bold (Ctrl+B)"><b>B</b></button>
+        <button type="button" class="summit-btn" id="draft-template-expand-italic-btn" title="Italic (Ctrl+I)"><i>I</i></button>
+        <button type="button" class="summit-btn" id="draft-template-expand-underline-btn" title="Underline (Ctrl+U)"><u>U</u></button>
+        <button type="button" class="summit-btn" id="draft-template-expand-link-btn" title="Insert a link at the cursor">Insert link</button>
+        <span class="draft-template-expand__spacer"></span>
+        <button type="button" class="summit-btn" data-template-expand-close>Cancel</button>
+        <button type="button" class="summit-btn summit-btn--primary" id="draft-template-expand-apply-btn">Apply</button>
+      </div>
     </div>
   </div>
 
