@@ -99,6 +99,7 @@
   const templateKeywordsEl = document.getElementById('draft-template-keywords');
   const templateKeywordsClearBtn = document.getElementById('draft-template-keywords-clear-btn');
   const templateKeywordInput = document.getElementById('draft-template-keyword-input');
+  const templateExpandBtn = document.getElementById('draft-template-expand-btn');
 
   const toastEl = document.getElementById('summit-toast');
   let toastTimer = null;
@@ -3182,6 +3183,83 @@
       a.setAttribute('rel', 'noopener');
       a.textContent = trimmedLabel;
       insertNodeAtCursor(a);
+    });
+  }
+
+  // ---------- Expanded template editor ----------
+  // The template box above is a rich-text contenteditable, and
+  // contenteditable's own caret/selection handling for typing,
+  // Backspace, and arrow-key navigation is entirely native browser
+  // behaviour — this app never intercepts those keys (only Enter and
+  // Ctrl+B/I/U, see wireRichTextEditing above), so it can't patch
+  // around browsers' own well-known caret bugs in small, cluttered
+  // rich-text regions. This modal doesn't fix that at the engine
+  // level; it sidesteps it with a much bigger, quieter editing
+  // surface — full width, generous line height, no surrounding
+  // scroll/toolbar clutter — which in practice gives far fewer
+  // mis-clicks and disorientation. It shares the exact same
+  // text+<br>+<a>/<b>/<i>/<u> model as the main box (same
+  // wireRichTextEditing wiring), so formatting and links survive the
+  // round trip. Changes only land back in the template box (still
+  // unsaved until "Save template") when Apply is clicked; Cancel/
+  // close discards them.
+  const templateExpandModal = document.getElementById('draft-template-expand-modal');
+  const templateExpandInput = document.getElementById('draft-template-expand-input');
+  const templateExpandApplyBtn = document.getElementById('draft-template-expand-apply-btn');
+  const templateExpandBoldBtn = document.getElementById('draft-template-expand-bold-btn');
+  const templateExpandItalicBtn = document.getElementById('draft-template-expand-italic-btn');
+  const templateExpandUnderlineBtn = document.getElementById('draft-template-expand-underline-btn');
+  const templateExpandLinkBtn = document.getElementById('draft-template-expand-link-btn');
+
+  function promptInsertLinkInto(el) {
+    const sel = window.getSelection();
+    const selectedText = (sel && sel.rangeCount && el.contains(sel.anchorNode))
+      ? sel.toString() : '';
+    const url = window.prompt('Link URL:');
+    if (!url || !url.trim()) return;
+    const label = window.prompt('Link text (leave blank to show the URL itself):', selectedText || '');
+    const trimmedUrl = url.trim();
+    const trimmedLabel = (label || '').trim() || trimmedUrl;
+    const a = document.createElement('a');
+    a.setAttribute('href', trimmedUrl);
+    a.setAttribute('target', '_blank');
+    a.setAttribute('rel', 'noopener');
+    a.textContent = trimmedLabel;
+    insertNodeInto(el, a);
+  }
+
+  if (templateExpandModal && templateExpandInput) {
+    wireRichTextEditing(templateExpandInput);
+
+    if (templateExpandBoldBtn) templateExpandBoldBtn.addEventListener('click', () => { templateExpandInput.focus(); document.execCommand('bold'); });
+    if (templateExpandItalicBtn) templateExpandItalicBtn.addEventListener('click', () => { templateExpandInput.focus(); document.execCommand('italic'); });
+    if (templateExpandUnderlineBtn) templateExpandUnderlineBtn.addEventListener('click', () => { templateExpandInput.focus(); document.execCommand('underline'); });
+    if (templateExpandLinkBtn) templateExpandLinkBtn.addEventListener('click', () => promptInsertLinkInto(templateExpandInput));
+
+    function openTemplateExpandModal() {
+      templateExpandInput.innerHTML = templateInput.innerHTML;
+      templateExpandModal.hidden = false;
+      templateExpandModal.setAttribute('aria-hidden', 'false');
+      templateExpandInput.focus();
+    }
+
+    function closeTemplateExpandModal() {
+      templateExpandModal.hidden = true;
+      templateExpandModal.setAttribute('aria-hidden', 'true');
+    }
+
+    function applyTemplateExpandModal() {
+      templateInput.innerHTML = templateExpandInput.innerHTML;
+      closeTemplateExpandModal();
+    }
+
+    if (templateExpandBtn) templateExpandBtn.addEventListener('click', openTemplateExpandModal);
+    if (templateExpandApplyBtn) templateExpandApplyBtn.addEventListener('click', applyTemplateExpandModal);
+    templateExpandModal.querySelectorAll('[data-template-expand-close]').forEach((el) => {
+      el.addEventListener('click', closeTemplateExpandModal);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !templateExpandModal.hidden) closeTemplateExpandModal();
     });
   }
 
