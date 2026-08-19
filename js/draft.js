@@ -189,9 +189,29 @@
   const expandedDeepIds = new Set();
 
   let uidCounter = 0;
+  // Timestamp + counter was enough to be unique within one browser tab,
+  // but template ids are now also written into exports and used to
+  // merge data across machines/colleagues (see importEntryText) — the
+  // random segment makes a same-millisecond collision between two
+  // independently-generated ids practically impossible.
   function uid(prefix) {
     uidCounter += 1;
-    return prefix + '-' + Date.now().toString(36) + '-' + uidCounter;
+    return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8) + '-' + uidCounter;
+  }
+
+  // Used whenever a new template is created with a default/guessed
+  // name (a fresh "+ New template", or one materializing during
+  // import) — if that name is already taken by a sibling, appends
+  // " (2)", " (3)"... so two templates never sit side by side with
+  // the same label, human-confusing even once they're correctly
+  // tracked as separate templates internally.
+  function uniqueTemplateName(templates, baseName) {
+    const base = (baseName || 'Untitled').trim() || 'Untitled';
+    const existingNames = new Set(templates.map((t) => t.name));
+    if (!existingNames.has(base)) return base;
+    let n = 2;
+    while (existingNames.has(base + ' (' + n + ')')) n += 1;
+    return base + ' (' + n + ')';
   }
 
   // ============================================================
@@ -317,6 +337,50 @@
   // already has a labels array, but keep call sites safe regardless
   // (e.g. objects rebuilt during import).
   function templateLabels(tpl) { return (tpl && tpl.labels) || []; }
+
+  // ---------- Template "folders" (by tag combo) ----------
+  // Templates aren't just uniquely identified by their own id — they're
+  // also grouped, for numbering and display, by the exact combination
+  // of Name/Term tags they carry. {} (no tags) is its own folder,
+  // {JohnSmith} is another, {JohnSmith, Urgent} another still, distinct
+  // from either single-tag folder. Each folder gets its own independent
+  // "Template 1"/"Template 2"/... numbering, so two templates tagged
+  // completely differently never have to fight over a default name.
+  function templateFolderKey(labels) {
+    return JSON.stringify((labels || []).slice().sort((a, b) => a.localeCompare(b)));
+  }
+  function sameFolder(labelsA, labelsB) { return templateFolderKey(labelsA) === templateFolderKey(labelsB); }
+  function templatesInFolder(templates, labels) {
+    const key = templateFolderKey(labels);
+    return templates.filter((t) => templateFolderKey(templateLabels(t)) === key);
+  }
+  // Ordered { labels, templates }[] for display — untagged first, then
+  // tagged combos sorted alphabetically by their joined tags.
+  function groupTemplatesByFolder(templates) {
+    const map = new Map();
+    templates.forEach((t) => {
+      const labels = templateLabels(t).slice().sort((a, b) => a.localeCompare(b));
+      const key = templateFolderKey(labels);
+      if (!map.has(key)) map.set(key, { labels, templates: [] });
+      map.get(key).templates.push(t);
+    });
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.labels.length === 0) return -1;
+      if (b.labels.length === 0) return 1;
+      return a.labels.join(', ').localeCompare(b.labels.join(', '));
+    });
+  }
+  // Renames tpl (already carrying its final labels) only if its current
+  // name actually collides with a sibling that landed in the same
+  // folder — never touches a name that isn't clashing, so a
+  // deliberately-chosen name like "Standard Reply" is never silently
+  // renumbered just because its tags changed.
+  function resolveTemplateNameCollision(templates, tpl) {
+    const siblings = templatesInFolder(templates, templateLabels(tpl)).filter((t) => t !== tpl);
+    if (siblings.some((t) => t.name === tpl.name)) {
+      tpl.name = uniqueTemplateName(siblings, tpl.name);
+    }
+  }
 
   // ---------- Multiple templates per Sub-Enquiry ----------
   // Each Sub-Enquiry can carry any number of named templates:
@@ -1017,9 +1081,10 @@
     const sub = subId ? state.subEnquiries[subId] : null;
     if (!sub) { fileTemplateSel.value = ''; return; }
     const templates = subTemplates(sub);
-    const name = window.prompt('New template name:', 'Template ' + (templates.length + 1));
+    const untagged = templatesInFolder(templates, []);
+    const name = window.prompt('New template name:', 'Template ' + (untagged.length + 1));
     if (!name || !name.trim()) { fileTemplateSel.value = ''; return; }
-    const tpl = { id: uid('tpl'), name: name.trim(), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
+    const tpl = { id: uid('tpl'), name: uniqueTemplateName(untagged, name.trim()), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
     templates.push(tpl);
     fillFileTemplateSelect(subId);
     fileTemplateSel.value = tpl.id;
@@ -1776,47 +1841,69 @@
       templateListEl.appendChild(note);
       return;
     }
-    templates.forEach((tpl) => {
-      const chip = document.createElement('span');
-      chip.className = 'draft-template-tab' + (tpl.id === activeTemplateId ? ' is-active' : '');
+    const folders = groupTemplatesByFolder(templates);
+    folders.forEach((folder) => {
+      const folderEl = document.createElement('div');
+      folderEl.className = 'draft-template-folder';
 
-      const label = document.createElement('span');
-      label.className = 'draft-template-tab__label';
-      label.textContent = tpl.name || 'Untitled';
-      label.title = 'Click to select this template, double-click to rename';
-      chip.appendChild(label);
+      // A single untagged group doesn't need a "No tags" header sitting
+      // above it — the header only earns its keep once there's more
+      // than one folder to actually tell apart.
+      if (folders.length > 1) {
+        const heading = document.createElement('p');
+        heading.className = 'draft-template-folder__label';
+        heading.textContent = folder.labels.length ? folder.labels.map((l) => '#' + l).join(' ') : 'No tags';
+        folderEl.appendChild(heading);
+      }
 
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'draft-chip__remove';
-      remove.setAttribute('aria-label', 'Delete template ' + (tpl.name || ''));
-      remove.textContent = '\u00D7';
-      remove.addEventListener('click', (e) => {
-        e.stopPropagation();
-        deleteTemplate(sub, tpl);
+      const chipsRow = document.createElement('div');
+      chipsRow.className = 'draft-template-folder__chips';
+
+      folder.templates.forEach((tpl) => {
+        const chip = document.createElement('span');
+        chip.className = 'draft-template-tab' + (tpl.id === activeTemplateId ? ' is-active' : '');
+
+        const label = document.createElement('span');
+        label.className = 'draft-template-tab__label';
+        label.textContent = tpl.name || 'Untitled';
+        label.title = 'Click to select this template, double-click to rename';
+        chip.appendChild(label);
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'draft-chip__remove';
+        remove.setAttribute('aria-label', 'Delete template ' + (tpl.name || ''));
+        remove.textContent = '\u00D7';
+        remove.addEventListener('click', (e) => {
+          e.stopPropagation();
+          deleteTemplate(sub, tpl);
+        });
+        chip.appendChild(remove);
+
+        chip.addEventListener('click', () => {
+          if (activeTemplateId === tpl.id) return;
+          activeTemplateId = tpl.id;
+          renderTemplateList(sub);
+          renderTemplateIntoEditor(tpl);
+          updateTemplateStatus(sub, tpl);
+          renderTemplateKeywords(sub, tpl);
+          renderLabelChips(templateLabels(tpl).slice(), true);
+        });
+        label.addEventListener('dblclick', (e) => {
+          e.stopPropagation();
+          const next = window.prompt('Rename this template:', tpl.name || '');
+          if (next === null) return;
+          const trimmed = next.trim();
+          if (!trimmed) return;
+          tpl.name = trimmed;
+          renderTemplateList(sub);
+        });
+
+        chipsRow.appendChild(chip);
       });
-      chip.appendChild(remove);
 
-      chip.addEventListener('click', () => {
-        if (activeTemplateId === tpl.id) return;
-        activeTemplateId = tpl.id;
-        renderTemplateList(sub);
-        renderTemplateIntoEditor(tpl);
-        updateTemplateStatus(sub, tpl);
-        renderTemplateKeywords(sub, tpl);
-        renderLabelChips(templateLabels(tpl).slice(), true);
-      });
-      label.addEventListener('dblclick', (e) => {
-        e.stopPropagation();
-        const next = window.prompt('Rename this template:', tpl.name || '');
-        if (next === null) return;
-        const trimmed = next.trim();
-        if (!trimmed) return;
-        tpl.name = trimmed;
-        renderTemplateList(sub);
-      });
-
-      templateListEl.appendChild(chip);
+      folderEl.appendChild(chipsRow);
+      templateListEl.appendChild(folderEl);
     });
   }
 
@@ -1902,7 +1989,8 @@
       if (!subId) return;
       const sub = state.subEnquiries[subId];
       const templates = subTemplates(sub);
-      const tpl = { id: uid('tpl'), name: 'Template ' + (templates.length + 1), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
+      const untagged = templatesInFolder(templates, []);
+      const tpl = { id: uid('tpl'), name: uniqueTemplateName(untagged, 'Template ' + (untagged.length + 1)), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
       templates.push(tpl);
       activeTemplateId = tpl.id;
       renderTemplateList(sub);
@@ -2254,7 +2342,8 @@
     let tpl = templates.find((t) => !t.template || !t.template.trim());
     const createdNew = !tpl;
     if (!tpl) {
-      tpl = { id: uid('tpl'), name: 'Template ' + (templates.length + 1), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
+      const untagged = templatesInFolder(templates, []);
+      tpl = { id: uid('tpl'), name: uniqueTemplateName(untagged, 'Template ' + (untagged.length + 1)), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
       templates.push(tpl);
     } else if (tpl.id === activeTemplateId) {
       // The empty slot is the one currently open in the editor — if it
@@ -3071,8 +3160,11 @@
     let tpl = findTemplateById(sub, activeTemplateId);
     if (!tpl) {
       // Nothing selected yet (fresh Sub-Enquiry) — Save creates the
-      // first template slot rather than silently doing nothing.
-      tpl = { id: uid('tpl'), name: 'Template ' + (templates.length + 1), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
+      // first template slot rather than silently doing nothing. It
+      // starts untagged (nothing to tag it with yet), so it's numbered
+      // within the untagged folder.
+      const untagged = templatesInFolder(templates, []);
+      tpl = { id: uid('tpl'), name: uniqueTemplateName(untagged, 'Template ' + (untagged.length + 1)), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
       templates.push(tpl);
       activeTemplateId = tpl.id;
     }
@@ -3082,6 +3174,10 @@
     commitPendingLabelInput();
     tpl.labels = pendingLabels.slice();
     recordLabelUsage(tpl.labels);
+    // Tags may have just changed, moving this template into a
+    // different folder — keep its name unique within that folder,
+    // but only if it's actually now colliding with a sibling there.
+    resolveTemplateNameCollision(templates, tpl);
     renderTemplateList(sub);
     renderTemplateKeywords(sub, tpl);
     templateStatus.textContent = 'Saved \u2014 linked to ' + sub.name +
@@ -4435,6 +4531,7 @@
   // ---------- Entry format ----------
   // PATH: Scheme > Category > Enquiry > Sub-Enquiry
   // KEYWORDS: kw1, kw2
+  // TEMPLATE_ID: tpl-xxxxx
   // TEMPLATE_KEYWORDS: kw3, kw4  (this one template's own keywords,
   //   separate from the Sub-Enquiry's general KEYWORDS: above)
   // LABEL: tag1, tag2
@@ -4456,6 +4553,14 @@
   // given Sub-Enquiry, which imports cleanly onto each template here too.
   // LINKS sits before TEMPLATE (not after) because TEMPLATE's own
   // regex reads everything to the end of the block, verbatim.
+  //
+  // TEMPLATE_ID is the template's real internal id, carried through so
+  // re-importing an export (your own, or a colleague's built under the
+  // same PATH) matches the *same* template again even if it's been
+  // renamed — and, crucially, so two people's independently-created
+  // "Template 1" don't collide into one just because they share a
+  // display name. A block with no TEMPLATE_ID (an older export) falls
+  // back to matching by TEMPLATE_NAME, same as before this existed.
 
   // Each exported entry is now one { sub, tpl } pair — a Sub-Enquiry
   // with more than one template produces one PATH/TEMPLATE block per
@@ -4478,6 +4583,7 @@
     return 'PATH: ' + path + '\n' +
       'KEYWORDS: ' + sub.keywords.join(', ') + '\n' +
       'LABEL: ' + templateLabels(tpl).join(', ') + '\n' +
+      'TEMPLATE_ID: ' + tpl.id + '\n' +
       'TEMPLATE_NAME: ' + (tpl.name || '') + '\n' +
       'TEMPLATE_KEYWORDS: ' + (tpl.keywords || []).join(', ') + '\n' +
       linksBlock +
@@ -4723,6 +4829,7 @@
     const pathMatch = block.match(/^PATH:\s*(.+)$/m);
     const keywordsMatch = block.match(/^KEYWORDS:\s*(.*)$/m);
     const labelMatch = block.match(/^LABEL:\s*(.*)$/m);
+    const templateIdMatch = block.match(/^TEMPLATE_ID:\s*(.*)$/m);
     const templateNameMatch = block.match(/^TEMPLATE_NAME:\s*(.*)$/m);
     const templateKeywordsMatch = block.match(/^TEMPLATE_KEYWORDS:\s*(.*)$/m);
     const linksMatch = block.match(/^LINKS:\n([\s\S]*?)(?=^(?:FORMAT:|TEMPLATE:))/m);
@@ -4748,6 +4855,10 @@
     // means "no rich formatting known"; import falls back to plain
     // text same as before rich formatting existed.
     const templateHtml = formatMatch ? sanitizeHtmlString(formatMatch[1].trim()) : null;
+    // No TEMPLATE_ID: line means an older export written before ids
+    // were carried through — import falls back to TEMPLATE_NAME (and,
+    // failing that, "the sub's one template") to find a match.
+    const templateId = templateIdMatch ? templateIdMatch[1].trim() : null;
     // No TEMPLATE_NAME: line means an older, single-template export —
     // treated as "unnamed" so import can fall back to updating a Sub-
     // Enquiry's one existing template in place (see importEntryText).
@@ -4758,7 +4869,7 @@
     const templateKeywords = templateKeywordsMatch
       ? templateKeywordsMatch[1].split(',').map((k) => k.trim()).filter(Boolean)
       : null;
-    return { path: segments, keywords, labels, links, templateHtml, templateName, templateKeywords, template: templateMatch[1].replace(/\n$/, '') };
+    return { path: segments, keywords, labels, links, templateHtml, templateId, templateName, templateKeywords, template: templateMatch[1].replace(/\n$/, '') };
   }
 
   function importEntryText(text) {
@@ -4777,16 +4888,37 @@
       const sub = state.subEnquiries[subId];
       sub.keywords = entry.keywords;
 
-      // Match an existing template by name when the export specified
-      // one; a nameless (older, single-template) export instead updates
-      // the Sub-Enquiry's one existing template in place, same as
-      // before multiple templates existed. Anything else creates a new
-      // template slot rather than guessing which one to overwrite.
+      // Match an existing template primarily by its carried-through id
+      // — the only identity that's safe to merge across two people's
+      // independently-built data, since a display name like
+      // "Template 1" is just an auto-incrementing label and two
+      // different templates (yours and a colleague's) can easily share
+      // one. An older export with no TEMPLATE_ID: line falls back to
+      // matching by name *within the same tag-combo folder* — so a
+      // same-named "Template 1" tagged differently is correctly
+      // treated as a different template, not merged. A nameless (older
+      // still, single-template) export instead updates the
+      // Sub-Enquiry's one existing template in place — same behaviour
+      // as before ids, tags or multiple templates existed. Anything
+      // else creates a new template slot rather than guessing which
+      // one to overwrite.
       const templates = subTemplates(sub);
-      let tpl = entry.templateName ? templates.find((t) => t.name === entry.templateName) : null;
-      if (!tpl && !entry.templateName && templates.length === 1) tpl = templates[0];
+      let tpl = entry.templateId ? templates.find((t) => t.id === entry.templateId) : null;
+      if (!tpl && !entry.templateId && entry.templateName) {
+        tpl = templates.find((t) => t.name === entry.templateName &&
+          (entry.labels === null || sameFolder(templateLabels(t), entry.labels)));
+      }
+      if (!tpl && !entry.templateId && !entry.templateName && templates.length === 1) tpl = templates[0];
       if (!tpl) {
-        tpl = { id: uid('tpl'), name: entry.templateName || ('Template ' + (templates.length + 1)), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
+        // New template — numbered within whichever tag-combo folder
+        // it's arriving with (untagged if LABEL: wasn't specified).
+        const folderLabels = entry.labels !== null ? entry.labels : [];
+        const folderSiblings = templatesInFolder(templates, folderLabels);
+        const name = uniqueTemplateName(folderSiblings, entry.templateName || ('Template ' + (folderSiblings.length + 1)));
+        // Keep the imported id (when there is one) rather than minting
+        // a fresh local one, so importing an updated version of the
+        // same file later still lands on this same template.
+        tpl = { id: entry.templateId || uid('tpl'), name, template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
         templates.push(tpl);
       } else if (entry.templateName) {
         tpl.name = entry.templateName;
@@ -4804,6 +4936,10 @@
       // LABEL: applies to this template specifically (see comment
       // above entryBlock) — not specified leaves its tags untouched.
       if (entry.labels !== null) tpl.labels = entry.labels;
+      // Its tags may have just moved it into a different folder —
+      // keep its name unique within that folder, only if it's now
+      // actually colliding with a sibling there.
+      resolveTemplateNameCollision(templates, tpl);
       if (existed) updated += 1; else created += 1;
     });
     refreshLabelDatalist();
