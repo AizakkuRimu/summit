@@ -1842,19 +1842,18 @@
       return;
     }
     const folders = groupTemplatesByFolder(templates);
-    folders.forEach((folder) => {
+    folders.forEach((folder, i) => {
       const folderEl = document.createElement('div');
       folderEl.className = 'draft-template-folder';
 
-      // A single untagged group doesn't need a "No tags" header sitting
-      // above it — the header only earns its keep once there's more
-      // than one folder to actually tell apart.
-      if (folders.length > 1) {
-        const heading = document.createElement('p');
-        heading.className = 'draft-template-folder__label';
-        heading.textContent = folder.labels.length ? folder.labels.map((l) => '#' + l).join(' ') : 'No tags';
-        folderEl.appendChild(heading);
-      }
+      // Always labelled — "Folder 1", "Folder 2"... — so the grouping
+      // itself is visible even when everything's still untagged and
+      // there's only the one folder so far.
+      const heading = document.createElement('p');
+      heading.className = 'draft-template-folder__label';
+      heading.textContent = 'Folder ' + (i + 1) + ' \u2014 ' +
+        (folder.labels.length ? folder.labels.map((l) => '#' + l).join(' ') : 'No tags');
+      folderEl.appendChild(heading);
 
       const chipsRow = document.createElement('div');
       chipsRow.className = 'draft-template-folder__chips';
