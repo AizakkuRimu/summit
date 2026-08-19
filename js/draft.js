@@ -2622,10 +2622,19 @@
   // the fill, or the newly-filled template box stays hidden behind
   // that placeholder even though the text was written into it.
   function fileSmartQuickPasteOn(subId) {
-    if (window.Summit && window.Summit.draft && window.Summit.draft.focusSubEnquiry) {
-      window.Summit.draft.focusSubEnquiry(subId);
-    } else {
-      state.selectedSubEnquiryId = subId;
+    // Skip the focus/tab-switch if `subId` is already the selected
+    // Sub-Enquiry (e.g. duplicateSubEnquiry() just focused it itself)
+    // — calling focusSubEnquiry() a second time re-clicks the Draft
+    // tab again, which can trigger a second stray renderDetail() and
+    // has been observed to wipe the pasted reply back out of the
+    // Template Text box before the fill below ever lands. One
+    // focus+render per paste is enough; a second is pure risk.
+    if (state.selectedSubEnquiryId !== subId) {
+      if (window.Summit && window.Summit.draft && window.Summit.draft.focusSubEnquiry) {
+        window.Summit.draft.focusSubEnquiry(subId);
+      } else {
+        state.selectedSubEnquiryId = subId;
+      }
     }
     renderDetail();
     return fileQuickPasteOnSub(subId, smartQpParsed);
@@ -2659,10 +2668,11 @@
         '<p class="draft-template-status" id="draft-smartqp-status" aria-live="polite"></p>' +
         '<div id="draft-smartqp-results"></div>' +
         '<div class="draft-smartqp__elsewhere" id="draft-smartqp-elsewhere" hidden>' +
-          '<h3 class="draft-col__subtitle">Or duplicate a specific Sub-Enquiry</h3>' +
-          '<p class="draft-search-help">Not one of the matches above? Search for any existing Sub-Enquiry to duplicate and file into instead.</p>' +
+          '<h3 class="draft-col__subtitle">Or pick any existing Sub-Enquiry</h3>' +
+          '<p class="draft-search-help">Not one of the matches above? Search for any existing Sub-Enquiry, then either jump straight to it or duplicate it first and file into the copy.</p>' +
           '<div class="draft-file-row">' +
-            '<select class="summit-select" id="draft-smartqp-duplicate-select" aria-label="Existing Sub-Enquiry to duplicate"></select>' +
+            '<select class="summit-select" id="draft-smartqp-duplicate-select" aria-label="Existing Sub-Enquiry"></select>' +
+            '<button type="button" class="summit-btn" id="draft-smartqp-jumpto-btn" disabled>Jump here &amp; file template</button>' +
             '<button type="button" class="summit-btn" id="draft-smartqp-duplicate-btn" disabled>Duplicate &amp; file template here</button>' +
           '</div>' +
           '<h3 class="draft-col__subtitle">Or create a new Sub-Enquiry elsewhere</h3>' +
@@ -2685,9 +2695,11 @@
     const newNameEl = modal.querySelector('#draft-smartqp-newname');
     const createBtn = modal.querySelector('#draft-smartqp-create-btn');
     const duplicateSelectEl = modal.querySelector('#draft-smartqp-duplicate-select');
+    const jumpToBtn = modal.querySelector('#draft-smartqp-jumpto-btn');
     const duplicateBtn = modal.querySelector('#draft-smartqp-duplicate-btn');
     enhanceSearchableSelect(duplicateSelectEl, { includeEmptyOption: true });
     duplicateSelectEl.addEventListener('change', () => {
+      jumpToBtn.disabled = !duplicateSelectEl.value;
       duplicateBtn.disabled = !duplicateSelectEl.value;
     });
 
@@ -2798,6 +2810,7 @@
           duplicateSelectEl.appendChild(opt);
         });
       duplicateSelectEl.value = '';
+      jumpToBtn.disabled = true;
       duplicateBtn.disabled = true;
     }
 
@@ -2875,6 +2888,14 @@
       const name = (newNameEl.value || '').trim() || smartQpParsed.enquiryText.slice(0, 40).trim() || 'New Sub-Enquiry';
       const newId = createSubEnquiry(enquiryId, name);
       const result = fileSmartQuickPasteOn(newId);
+      finishSmartQuickPaste(result);
+    });
+
+    jumpToBtn.addEventListener('click', () => {
+      const sourceId = duplicateSelectEl.value;
+      if (!sourceId) { statusEl.textContent = 'Search for and pick a Sub-Enquiry to jump to first.'; return; }
+      if (!smartQpParsed) { statusEl.textContent = 'Click \u201cFind matching Sub-Enquiries\u201d first.'; return; }
+      const result = fileSmartQuickPasteOn(sourceId);
       finishSmartQuickPaste(result);
     });
 
