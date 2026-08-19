@@ -793,9 +793,24 @@
 
 .draft-template-list {
   display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.draft-template-folder__label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--gray);
+  margin: 0 0 4px;
+}
+
+.draft-template-folder__chips {
+  display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 4px;
 }
 
 .draft-template-tab {
