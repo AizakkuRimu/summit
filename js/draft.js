@@ -2110,6 +2110,7 @@
       const result = applyQuickTemplate(raw, quickTplEl._lastHtml, ignoreMiddleEl.checked);
       statusEl.textContent = result.message;
       statusEl.classList.toggle('is-saved', result.ok);
+      statusEl.classList.toggle('has-duplicate-warning', !!(result.duplicates && result.duplicates.length));
       if (result.ok) {
         inputEl.value = '';
         quickTplEl._lastHtml = '';
@@ -2362,6 +2363,51 @@
     return { enquiryText: parsed.enquiryText, templateText: parsed.templateText, templateHtml: '', templateLinks: [] };
   }
 
+  // ---------- Potential duplicate detection ----------
+  // Flags a pasted reply against every existing template's own body
+  // text: if at least 70% of the pasted reply's meaningful words
+  // (extractKeywords, so stop words don't skew it) already show up in
+  // some existing template, it's very likely the same content already
+  // filed somewhere. Surfaced as a warning, not a block — the wording
+  // might still be a deliberate variant worth keeping.
+  const DUPLICATE_SIMILARITY_THRESHOLD = 0.7;
+
+  // Containment, not Jaccard: how much of the *new* text's words are
+  // already covered by the existing one, so a short reply that's
+  // entirely swallowed by a longer existing template still flags,
+  // even though the reverse direction wouldn't.
+  function templateSimilarity(newWords, existingWords) {
+    if (!newWords.length || !existingWords.length) return 0;
+    const existingSet = new Set(existingWords);
+    const matched = newWords.filter((w) => existingSet.has(w));
+    return matched.length / newWords.length;
+  }
+
+  // Every existing template at least DUPLICATE_SIMILARITY_THRESHOLD
+  // similar to `templateText`, highest similarity first. excludeTplId
+  // skips a template being overwritten in place (re-pasting into the
+  // same slot) so it's never flagged as a duplicate of itself.
+  function findPotentialDuplicateTemplates(templateText, excludeTplId) {
+    const newWords = extractKeywords(templateText);
+    if (!newWords.length) return [];
+    const found = [];
+    Object.values(state.subEnquiries).forEach((sub) => {
+      subTemplates(sub).forEach((tpl) => {
+        if (!tpl.template || tpl.id === excludeTplId) return;
+        const similarity = templateSimilarity(newWords, extractKeywords(tpl.template));
+        if (similarity >= DUPLICATE_SIMILARITY_THRESHOLD) found.push({ sub, tpl, similarity });
+      });
+    });
+    found.sort((a, b) => b.similarity - a.similarity);
+    return found;
+  }
+
+  function duplicateWarningText(duplicates) {
+    if (!duplicates.length) return '';
+    const top = duplicates[0];
+    return ' \u26A0\uFE0F Potential duplicate \u2014 ' + Math.round(top.similarity * 100) + '% similar to "' + top.tpl.name + '" on ' + pathForSubEnquiry(top.sub.id) + '.';
+  }
+
   // Files a parsed enquiry/reply pair onto a specific Sub-Enquiry —
   // the part of Quick Add From Paste that finds/creates the right
   // template slot, extracts+merges keywords, and pre-tags Name/Term
@@ -2399,6 +2445,8 @@
     }
     activeTemplateId = tpl.id;
 
+    const duplicates = findPotentialDuplicateTemplates(templateText, tpl.id);
+
     const keywords = extractKeywords(enquiryText);
     const mergedKw = (tpl.keywords || []).slice();
     keywords.forEach((kw) => { if (!mergedKw.includes(kw)) mergedKw.push(kw); });
@@ -2420,10 +2468,12 @@
 
     return {
       ok: true,
+      duplicates,
       message: 'Filled ' + tpl.name + (createdNew ? ' (new)' : '') + ' on ' + pathForSubEnquiry(subId) +
         ' \u2014 ' + keywords.length + ' keyword(s) extracted' +
         (recommended.length ? ', tagged ' + recommended.map((l) => '#' + l).join(' ') : '') +
-        '. Review the template box, then click Save template.'
+        '. Review the template box, then click Save template.' +
+        duplicateWarningText(duplicates)
     };
   }
 
@@ -2536,13 +2586,20 @@
 
   // Jumps the whole Hierarchy/Tag view over to `subId`, then runs the
   // shared file-a-template step against whatever's now selected.
+  // focusSubEnquiry() only refreshes the tree (it's also used for bare
+  // navigation elsewhere), so the detail panel on the right — which
+  // may still be showing its "Select a Sub-Enquiry first" placeholder,
+  // since Smart Quick Paste is explicitly meant to work without one
+  // pre-selected — needs its own explicit renderDetail() here before
+  // the fill, or the newly-filled template box stays hidden behind
+  // that placeholder even though the text was written into it.
   function fileSmartQuickPasteOn(subId) {
     if (window.Summit && window.Summit.draft && window.Summit.draft.focusSubEnquiry) {
       window.Summit.draft.focusSubEnquiry(subId);
     } else {
       state.selectedSubEnquiryId = subId;
-      renderAll();
     }
+    renderDetail();
     return fileQuickPasteOnSub(subId, smartQpParsed);
   }
 
@@ -2609,7 +2666,7 @@
       lastHtml = '';
     });
 
-    function renderCard(match, pass) {
+    function renderCard(match, pass, isDuplicateHere) {
       const card = document.createElement('div');
       card.className = 'draft-result';
       card.setAttribute('role', 'listitem');
@@ -2628,6 +2685,13 @@
           (pass === 'body' ? ' (from reply text)' : '');
       header.appendChild(badge);
       card.appendChild(header);
+
+      if (isDuplicateHere) {
+        const dupBadge = document.createElement('p');
+        dupBadge.className = 'draft-smartqp__dup-badge';
+        dupBadge.textContent = '\u26A0\uFE0F Potential Duplicate \u2014 a very similar template already exists here.';
+        card.appendChild(dupBadge);
+      }
 
       if (match.matched && match.matched.length) {
         const kwWrap = document.createElement('div');
@@ -2683,10 +2747,28 @@
     function finishSmartQuickPaste(result) {
       statusEl.textContent = result.message;
       statusEl.classList.toggle('is-saved', result.ok);
+      statusEl.classList.toggle('has-duplicate-warning', !!(result.duplicates && result.duplicates.length));
       if (result.ok) {
         showToast(result.message);
         closeSmartQuickPasteModal();
       }
+    }
+
+    function renderDuplicateWarning(duplicates) {
+      const warn = document.createElement('div');
+      warn.className = 'draft-smartqp__dup-warning';
+      const top = duplicates.slice(0, 3);
+      const heading = document.createElement('p');
+      heading.innerHTML = '<strong>\u26A0\uFE0F Potential duplicate' + (top.length > 1 ? 's' : '') + '</strong> \u2014 this reply looks very similar to what\u2019s already saved:';
+      warn.appendChild(heading);
+      const list = document.createElement('ul');
+      top.forEach((d) => {
+        const li = document.createElement('li');
+        li.textContent = Math.round(d.similarity * 100) + '% similar to \u201c' + d.tpl.name + '\u201d on ' + pathForSubEnquiry(d.sub.id);
+        list.appendChild(li);
+      });
+      warn.appendChild(list);
+      return warn;
     }
 
     findBtn.addEventListener('click', () => {
@@ -2707,8 +2789,12 @@
       smartQpParsed = parsedInput;
       const { matches, pass } = computeSmartQuickPasteMatches(parsedInput.enquiryText, parsedInput.templateText);
       smartQpPass = pass;
+      const duplicates = findPotentialDuplicateTemplates(parsedInput.templateText);
+      const dupSubIds = new Set(duplicates.map((d) => d.sub.id));
 
       resultsEl.innerHTML = '';
+      if (duplicates.length) resultsEl.appendChild(renderDuplicateWarning(duplicates));
+
       if (!matches.length) {
         statusEl.textContent = 'No Sub-Enquiries exist yet \u2014 create one below to file this template.';
       } else {
@@ -2718,7 +2804,7 @@
             ? 'No keyword tags matched \u2014 these matched on the reply text against existing template wording instead.'
             : 'No keyword or wording match found \u2014 here\u2019s a best guess.';
         statusEl.classList.remove('is-saved');
-        matches.forEach((m) => resultsEl.appendChild(renderCard(m, pass)));
+        matches.forEach((m) => resultsEl.appendChild(renderCard(m, pass, dupSubIds.has(m.sub.id))));
       }
 
       refreshElsewherePicker();
