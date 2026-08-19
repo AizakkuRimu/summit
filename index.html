@@ -826,13 +826,13 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><line x1="4" y1="4" x2="16" y2="16"/><line x1="16" y1="4" x2="4" y2="16"/></svg>
         </button>
       </div>
-      <p class="draft-search-help">A larger, uncluttered space for precise editing — bigger click targets and more room around every line. Click Apply to carry your changes back into the template box (still unsaved until you click Save template there).</p>
-      <div id="draft-template-expand-input" class="draft-textarea draft-textarea--template draft-template-expand__input" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Expanded template text editor"></div>
+      <p class="draft-search-help">A plain text box — not the same rich-text editor as the template box, so Backspace, selecting text, and arrow keys behave normally and predictably here. Bold/italic/underline/links are shown as plain markers you can type or leave alone: <code>⟦B⟧bold⟦/B⟧</code>, <code>⟦I⟧italic⟦/I⟧</code>, <code>⟦U⟧underline⟦/U⟧</code>, <code>⟦L:https://…⟧link text⟦/L⟧</code>. The toolbar below wraps your current selection in the right markers for you. Click Apply to carry your changes back into the template box (still unsaved until you click Save template there).</p>
+      <textarea id="draft-template-expand-input" class="draft-textarea draft-template-expand__input" aria-label="Expanded template text editor" spellcheck="true"></textarea>
       <div class="summit-modal__actions draft-template-expand__toolbar">
-        <button type="button" class="summit-btn" id="draft-template-expand-bold-btn" title="Bold (Ctrl+B)"><b>B</b></button>
-        <button type="button" class="summit-btn" id="draft-template-expand-italic-btn" title="Italic (Ctrl+I)"><i>I</i></button>
-        <button type="button" class="summit-btn" id="draft-template-expand-underline-btn" title="Underline (Ctrl+U)"><u>U</u></button>
-        <button type="button" class="summit-btn" id="draft-template-expand-link-btn" title="Insert a link at the cursor">Insert link</button>
+        <button type="button" class="summit-btn" id="draft-template-expand-bold-btn" title="Wrap selection in bold markers">B</button>
+        <button type="button" class="summit-btn" id="draft-template-expand-italic-btn" title="Wrap selection in italic markers"><i>I</i></button>
+        <button type="button" class="summit-btn" id="draft-template-expand-underline-btn" title="Wrap selection in underline markers"><u>U</u></button>
+        <button type="button" class="summit-btn" id="draft-template-expand-link-btn" title="Wrap selection (or insert at cursor) as a link">Insert link</button>
         <span class="draft-template-expand__spacer"></span>
         <button type="button" class="summit-btn" data-template-expand-close>Cancel</button>
         <button type="button" class="summit-btn summit-btn--primary" id="draft-template-expand-apply-btn">Apply</button>
