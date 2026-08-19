@@ -3187,22 +3187,28 @@
   }
 
   // ---------- Expanded template editor ----------
-  // The template box above is a rich-text contenteditable, and
-  // contenteditable's own caret/selection handling for typing,
-  // Backspace, and arrow-key navigation is entirely native browser
-  // behaviour — this app never intercepts those keys (only Enter and
-  // Ctrl+B/I/U, see wireRichTextEditing above), so it can't patch
-  // around browsers' own well-known caret bugs in small, cluttered
-  // rich-text regions. This modal doesn't fix that at the engine
-  // level; it sidesteps it with a much bigger, quieter editing
-  // surface — full width, generous line height, no surrounding
-  // scroll/toolbar clutter — which in practice gives far fewer
-  // mis-clicks and disorientation. It shares the exact same
-  // text+<br>+<a>/<b>/<i>/<u> model as the main box (same
-  // wireRichTextEditing wiring), so formatting and links survive the
-  // round trip. Changes only land back in the template box (still
-  // unsaved until "Save template") when Apply is clicked; Cancel/
-  // close discards them.
+  // The template box above is a rich-text contenteditable, and its
+  // caret/selection handling for typing, Backspace, and arrow-key
+  // navigation is entirely native browser behaviour — this app never
+  // intercepts those keys (only Enter and Ctrl+B/I/U, see
+  // wireRichTextEditing above). A bigger contenteditable box still
+  // runs on the same browser caret engine, so it inherits the exact
+  // same bugs — bigger isn't different. A plain <textarea> is a
+  // genuinely different, much simpler native text model with none of
+  // contenteditable's caret/Range complexity, so this modal uses one
+  // for real reliability rather than just more room.
+  //
+  // Formatting/links have to travel through that plain text somehow,
+  // so they're shown as literal bracket markers — ⟦B⟧/⟦/B⟧,
+  // ⟦I⟧/⟦/I⟧, ⟦U⟧/⟦/U⟧, ⟦L:url⟧/⟦/L⟧ — using ⟦ ⟧ (U+27E6/27E7)
+  // specifically because they're nothing anyone would ever type in
+  // normal correspondence, so round-tripping through them is
+  // unambiguous. The toolbar buttons below wrap the current selection
+  // in the right markers using textarea.selectionStart/End (a plain,
+  // reliable API — no contenteditable Range involved), so most people
+  // never have to type the markers by hand. Changes only land back in
+  // the template box (still unsaved until "Save template") when Apply
+  // is clicked; Cancel/close discards them.
   const templateExpandModal = document.getElementById('draft-template-expand-modal');
   const templateExpandInput = document.getElementById('draft-template-expand-input');
   const templateExpandApplyBtn = document.getElementById('draft-template-expand-apply-btn');
@@ -3211,33 +3217,152 @@
   const templateExpandUnderlineBtn = document.getElementById('draft-template-expand-underline-btn');
   const templateExpandLinkBtn = document.getElementById('draft-template-expand-link-btn');
 
-  function promptInsertLinkInto(el) {
-    const sel = window.getSelection();
-    const selectedText = (sel && sel.rangeCount && el.contains(sel.anchorNode))
-      ? sel.toString() : '';
-    const url = window.prompt('Link URL:');
-    if (!url || !url.trim()) return;
-    const label = window.prompt('Link text (leave blank to show the URL itself):', selectedText || '');
-    const trimmedUrl = url.trim();
-    const trimmedLabel = (label || '').trim() || trimmedUrl;
-    const a = document.createElement('a');
-    a.setAttribute('href', trimmedUrl);
-    a.setAttribute('target', '_blank');
-    a.setAttribute('rel', 'noopener');
-    a.textContent = trimmedLabel;
-    insertNodeInto(el, a);
-  }
-
+  // HTML (from templateInput.innerHTML) -> marker plain text.
+  // Reuses htmlToSegments (already the canonical HTML -> flat
+  // segments walk used elsewhere in this file) so this stays in sync
+  // with however the main editor's model evolves.
   if (templateExpandModal && templateExpandInput) {
-    wireRichTextEditing(templateExpandInput);
 
-    if (templateExpandBoldBtn) templateExpandBoldBtn.addEventListener('click', () => { templateExpandInput.focus(); document.execCommand('bold'); });
-    if (templateExpandItalicBtn) templateExpandItalicBtn.addEventListener('click', () => { templateExpandInput.focus(); document.execCommand('italic'); });
-    if (templateExpandUnderlineBtn) templateExpandUnderlineBtn.addEventListener('click', () => { templateExpandInput.focus(); document.execCommand('underline'); });
-    if (templateExpandLinkBtn) templateExpandLinkBtn.addEventListener('click', () => promptInsertLinkInto(templateExpandInput));
+    function segmentsToMarkupText(segments) {
+      return segments.map((seg) => {
+        let core = seg.type === 'link'
+          ? '\u27e6L:' + seg.url + '\u27e7' + seg.text + '\u27e6/L\u27e7'
+          : seg.value;
+        if (seg.bold) core = '\u27e6B\u27e7' + core + '\u27e6/B\u27e7';
+        if (seg.italic) core = '\u27e6I\u27e7' + core + '\u27e6/I\u27e7';
+        if (seg.underline) core = '\u27e6U\u27e7' + core + '\u27e6/U\u27e7';
+        return core;
+      }).join('');
+    }
+
+    // Marker plain text -> a { type, ... }[] node tree (text / wrap /
+    // link nodes, wrap/link nodes carrying their own children so B
+    // inside a link or a link inside B both round-trip). Malformed or
+    // stray markers (an unmatched ⟦B⟧ with no closing tag, say) fall
+    // back to being kept as literal text rather than silently
+    // dropping content — a broken marker is recoverable by the user
+    // seeing it in the text; silently eaten text is not.
+    function parseMarkupText(text) {
+      let i = 0;
+      const n = text.length;
+      function parseUntil(closeTag) {
+        const nodes = [];
+        let buf = '';
+        const flush = () => { if (buf) { nodes.push({ type: 'text', value: buf }); buf = ''; } };
+        while (i < n) {
+          if (text[i] === '\u27e6') {
+            const closeIdx = text.indexOf('\u27e7', i);
+            if (closeIdx === -1) { buf += text[i]; i += 1; continue; }
+            const tagContent = text.slice(i + 1, closeIdx);
+            if (tagContent.charAt(0) === '/') {
+              const tagName = tagContent.slice(1);
+              if (closeTag && tagName === closeTag) {
+                flush();
+                i = closeIdx + 1;
+                return nodes;
+              }
+              // Closing tag with no matching open in this scope — treat literally.
+              buf += text.slice(i, closeIdx + 1);
+              i = closeIdx + 1;
+              continue;
+            }
+            if (tagContent === 'B' || tagContent === 'I' || tagContent === 'U') {
+              flush();
+              i = closeIdx + 1;
+              nodes.push({ type: 'wrap', tag: tagContent, children: parseUntil(tagContent) });
+              continue;
+            }
+            if (tagContent.slice(0, 2) === 'L:') {
+              flush();
+              const url = tagContent.slice(2);
+              i = closeIdx + 1;
+              nodes.push({ type: 'link', url, children: parseUntil('L') });
+              continue;
+            }
+            // Unrecognized marker — treat literally.
+            buf += text.slice(i, closeIdx + 1);
+            i = closeIdx + 1;
+            continue;
+          }
+          buf += text[i];
+          i += 1;
+        }
+        flush();
+        return nodes;
+      }
+      return parseUntil(null);
+    }
+
+    function appendMarkupNodes(el, nodes) {
+      nodes.forEach((node) => {
+        if (node.type === 'text') {
+          const lines = node.value.split('\n');
+          lines.forEach((line, idx) => {
+            if (line) el.appendChild(document.createTextNode(line));
+            if (idx < lines.length - 1) el.appendChild(document.createElement('br'));
+          });
+        } else if (node.type === 'wrap') {
+          const wrapEl = document.createElement(node.tag.toLowerCase());
+          appendMarkupNodes(wrapEl, node.children);
+          el.appendChild(wrapEl);
+        } else if (node.type === 'link') {
+          const a = document.createElement('a');
+          a.setAttribute('href', node.url);
+          a.setAttribute('target', '_blank');
+          a.setAttribute('rel', 'noopener');
+          // Link text is flat in this app's model (see htmlToSegments)
+          // — plain-text the children rather than nesting further tags.
+          a.textContent = node.children.map((c) => (c.type === 'text' ? c.value : (c.text || ''))).join('');
+          el.appendChild(a);
+        }
+      });
+    }
+
+    function markupTextToHtml(text) {
+      const nodes = parseMarkupText(text);
+      const container = document.createElement('div');
+      appendMarkupNodes(container, nodes);
+      return container.innerHTML;
+    }
+
+    // Wraps (or, with nothing selected, inserts a placeholder inside)
+    // the current textarea selection in marker tags — plain
+    // setRangeText-based string editing, not a DOM Range, so it can't
+    // hit any contenteditable caret bug.
+    function wrapSelection(openTag, closeTag, placeholder) {
+      const start = templateExpandInput.selectionStart;
+      const end = templateExpandInput.selectionEnd;
+      const value = templateExpandInput.value;
+      const selected = value.slice(start, end) || placeholder;
+      const replacement = openTag + selected + closeTag;
+      templateExpandInput.setRangeText(replacement, start, end, 'select');
+      templateExpandInput.focus();
+      // Select just the inner text (not the markers) so typing over a
+      // placeholder or existing selection replaces the right thing.
+      templateExpandInput.setSelectionRange(start + openTag.length, start + openTag.length + selected.length);
+    }
+
+    if (templateExpandBoldBtn) templateExpandBoldBtn.addEventListener('click', () => wrapSelection('\u27e6B\u27e7', '\u27e6/B\u27e7', 'bold text'));
+    if (templateExpandItalicBtn) templateExpandItalicBtn.addEventListener('click', () => wrapSelection('\u27e6I\u27e7', '\u27e6/I\u27e7', 'italic text'));
+    if (templateExpandUnderlineBtn) templateExpandUnderlineBtn.addEventListener('click', () => wrapSelection('\u27e6U\u27e7', '\u27e6/U\u27e7', 'underlined text'));
+    if (templateExpandLinkBtn) {
+      templateExpandLinkBtn.addEventListener('click', () => {
+        const start = templateExpandInput.selectionStart;
+        const end = templateExpandInput.selectionEnd;
+        const selected = templateExpandInput.value.slice(start, end);
+        const url = window.prompt('Link URL:');
+        if (!url || !url.trim()) return;
+        const trimmedUrl = url.trim();
+        const label = window.prompt('Link text (leave blank to show the URL itself):', selected || '');
+        const trimmedLabel = (label || '').trim() || trimmedUrl;
+        const replacement = '\u27e6L:' + trimmedUrl + '\u27e7' + trimmedLabel + '\u27e6/L\u27e7';
+        templateExpandInput.setRangeText(replacement, start, end, 'end');
+        templateExpandInput.focus();
+      });
+    }
 
     function openTemplateExpandModal() {
-      templateExpandInput.innerHTML = templateInput.innerHTML;
+      templateExpandInput.value = segmentsToMarkupText(htmlToSegments(templateInput.innerHTML));
       templateExpandModal.hidden = false;
       templateExpandModal.setAttribute('aria-hidden', 'false');
       templateExpandInput.focus();
@@ -3249,7 +3374,7 @@
     }
 
     function applyTemplateExpandModal() {
-      templateInput.innerHTML = templateExpandInput.innerHTML;
+      templateInput.innerHTML = markupTextToHtml(templateExpandInput.value);
       closeTemplateExpandModal();
     }
 
