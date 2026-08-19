@@ -2376,8 +2376,16 @@
     let tpl = templates.find((t) => !t.template || !t.template.trim());
     const createdNew = !tpl;
     if (!tpl) {
-      const untagged = templatesInFolder(templates, []);
-      tpl = { id: uid('tpl'), name: uniqueTemplateName(untagged, 'Template ' + (untagged.length + 1)), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
+      // Work out which folder this template will actually land in
+      // *before* creating it: it's about to be pre-tagged with the
+      // recommended Name/Term labels below, so it belongs in that
+      // tagged folder from the start, not the untagged one — otherwise
+      // it's born as "Template 1" in the blank/untagged folder, then
+      // renamed to "Template 1 (2)" the moment Save commits those same
+      // labels and it collides with the real Template 1 next door.
+      const targetLabels = recommendedLabels();
+      const folderSiblings = templatesInFolder(templates, targetLabels);
+      tpl = { id: uid('tpl'), name: uniqueTemplateName(folderSiblings, 'Template ' + (folderSiblings.length + 1)), template: '', templateHtml: '', templateLinks: [], keywords: [], labels: targetLabels.slice() };
       templates.push(tpl);
     } else if (tpl.id === activeTemplateId) {
       // The empty slot is the one currently open in the editor — if it
