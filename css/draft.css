@@ -967,6 +967,24 @@
   opacity: 0.6;
 }
 
+.draft-expand-btn {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--bronze-deep);
+  background: none;
+  border: none;
+  padding: 0;
+  height: auto;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.draft-expand-btn:hover {
+  text-decoration: underline;
+  color: var(--bronze);
+}
+
 .draft-field-label {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 10.5px;
@@ -1327,6 +1345,30 @@
   color: var(--gray);
   font-size: 12px;
   padding: 14px 0;
+}
+
+.draft-template-expand__panel {
+  width: min(880px, 94vw);
+  height: 88vh;
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.draft-template-expand__input {
+  flex: 1 1 auto;
+  min-height: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  padding: 18px 20px;
+}
+
+.draft-template-expand__toolbar {
+  justify-content: flex-start;
+}
+
+.draft-template-expand__spacer {
+  flex: 1 1 auto;
 }
 
 .draft-hierarchy-io__panel .draft-textarea {
