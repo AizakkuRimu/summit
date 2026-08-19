@@ -2659,6 +2659,12 @@
         '<p class="draft-template-status" id="draft-smartqp-status" aria-live="polite"></p>' +
         '<div id="draft-smartqp-results"></div>' +
         '<div class="draft-smartqp__elsewhere" id="draft-smartqp-elsewhere" hidden>' +
+          '<h3 class="draft-col__subtitle">Or duplicate a specific Sub-Enquiry</h3>' +
+          '<p class="draft-search-help">Not one of the matches above? Search for any existing Sub-Enquiry to duplicate and file into instead.</p>' +
+          '<div class="draft-file-row">' +
+            '<select class="summit-select" id="draft-smartqp-duplicate-select" aria-label="Existing Sub-Enquiry to duplicate"></select>' +
+            '<button type="button" class="summit-btn" id="draft-smartqp-duplicate-btn" disabled>Duplicate &amp; file template here</button>' +
+          '</div>' +
           '<h3 class="draft-col__subtitle">Or create a new Sub-Enquiry elsewhere</h3>' +
           '<div class="draft-file-row">' +
             '<select class="summit-select" id="draft-smartqp-enquiry-select" aria-label="Enquiry to create the new Sub-Enquiry under"></select>' +
@@ -2678,6 +2684,12 @@
     const enquirySelectEl = modal.querySelector('#draft-smartqp-enquiry-select');
     const newNameEl = modal.querySelector('#draft-smartqp-newname');
     const createBtn = modal.querySelector('#draft-smartqp-create-btn');
+    const duplicateSelectEl = modal.querySelector('#draft-smartqp-duplicate-select');
+    const duplicateBtn = modal.querySelector('#draft-smartqp-duplicate-btn');
+    enhanceSearchableSelect(duplicateSelectEl, { includeEmptyOption: true });
+    duplicateSelectEl.addEventListener('change', () => {
+      duplicateBtn.disabled = !duplicateSelectEl.value;
+    });
 
     // Mirrors Quick Template Adder's own siphon of the paste event's
     // richer text/html representation, kept independent per-modal.
@@ -2770,6 +2782,23 @@
           enquirySelectEl.appendChild(opt);
         });
       createBtn.disabled = enquirySelectEl.options.length === 0;
+
+      duplicateSelectEl.innerHTML = '';
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'Search for a Sub-Enquiry\u2026';
+      duplicateSelectEl.appendChild(placeholder);
+      Object.keys(state.subEnquiries)
+        .map((id) => ({ id, path: pathForSubEnquiry(id) }))
+        .sort((a, b) => a.path.localeCompare(b.path))
+        .forEach((s) => {
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = s.path;
+          duplicateSelectEl.appendChild(opt);
+        });
+      duplicateSelectEl.value = '';
+      duplicateBtn.disabled = true;
     }
 
     function finishSmartQuickPaste(result) {
@@ -2845,6 +2874,17 @@
       if (!smartQpParsed) { statusEl.textContent = 'Click \u201cFind matching Sub-Enquiries\u201d first.'; return; }
       const name = (newNameEl.value || '').trim() || smartQpParsed.enquiryText.slice(0, 40).trim() || 'New Sub-Enquiry';
       const newId = createSubEnquiry(enquiryId, name);
+      const result = fileSmartQuickPasteOn(newId);
+      finishSmartQuickPaste(result);
+    });
+
+    duplicateBtn.addEventListener('click', () => {
+      const sourceId = duplicateSelectEl.value;
+      if (!sourceId) { statusEl.textContent = 'Search for and pick a Sub-Enquiry to duplicate first.'; return; }
+      if (!smartQpParsed) { statusEl.textContent = 'Click \u201cFind matching Sub-Enquiries\u201d first.'; return; }
+      if (!window.Summit || !window.Summit.draft || !window.Summit.draft.duplicateSubEnquiry) return;
+      const newId = window.Summit.draft.duplicateSubEnquiry(sourceId, { withContents: false });
+      if (!newId) { statusEl.textContent = 'Couldn\u2019t duplicate \u2014 that Sub-Enquiry may have been removed.'; return; }
       const result = fileSmartQuickPasteOn(newId);
       finishSmartQuickPaste(result);
     });
