@@ -71,6 +71,7 @@
 
   const addSchemeBtn = document.getElementById('draft-add-scheme-btn');
   const quickAddBtn = document.getElementById('draft-quick-add-btn');
+  const smartQuickPasteBtn = document.getElementById('draft-smart-quickpaste-btn');
   const treeEl = document.getElementById('draft-tree');
   const treeEmptyNote = document.getElementById('draft-tree-empty');
   const treeSearchInput = document.getElementById('draft-tree-search-input');
@@ -2338,39 +2339,39 @@
     return { enquiryEl: beforeEl, replyEl: afterEl };
   }
 
-  function applyQuickTemplate(raw, html, ignoreMiddle) {
-    const subId = state.selectedSubEnquiryId;
-    const sub = subId ? state.subEnquiries[subId] : null;
-    if (!sub) return { ok: false, message: 'Select a Sub-Enquiry in the Hierarchy first.' };
-
-    let enquiryText = '';
-    let templateText = '';
-    let templateHtml = '';
-    let templateLinks = [];
-
+  // Shared by Quick Add From Paste and Smart Quick Paste: turns a raw
+  // two-column paste (plus any richer text/html siphoned off the same
+  // paste event) into { enquiryText, templateText, templateHtml,
+  // templateLinks }, or null if no split point could be found at all.
+  function parseQuickPasteInput(raw, html, ignoreMiddle) {
     const htmlParsed = html ? parseQuickTemplateHtml(html, ignoreMiddle) : null;
     if (htmlParsed) {
-      enquiryText = plainTextFromElement(htmlParsed.enquiryEl).trim();
-      templateText = plainTextFromElement(htmlParsed.replyEl).trim();
+      const enquiryText = plainTextFromElement(htmlParsed.enquiryEl).trim();
+      const templateText = plainTextFromElement(htmlParsed.replyEl).trim();
       if (enquiryText && templateText) {
-        templateHtml = htmlParsed.replyEl.innerHTML;
-        templateLinks = linksFromElement(htmlParsed.replyEl);
-      }
-    }
-
-    if (!enquiryText || !templateText) {
-      const parsed = parseQuickTemplateBlock(raw, ignoreMiddle);
-      if (!parsed) {
         return {
-          ok: false,
-          message: 'Couldn\u2019t find a tab character or a 2nd \u201cDear\u201d to split the enquiry from the reply \u2014 paste the raw text copied straight from the table row.'
+          enquiryText,
+          templateText,
+          templateHtml: htmlParsed.replyEl.innerHTML,
+          templateLinks: linksFromElement(htmlParsed.replyEl)
         };
       }
-      enquiryText = parsed.enquiryText;
-      templateText = parsed.templateText;
-      templateHtml = '';
-      templateLinks = [];
     }
+    const parsed = parseQuickTemplateBlock(raw, ignoreMiddle);
+    if (!parsed) return null;
+    return { enquiryText: parsed.enquiryText, templateText: parsed.templateText, templateHtml: '', templateLinks: [] };
+  }
+
+  // Files a parsed enquiry/reply pair onto a specific Sub-Enquiry —
+  // the part of Quick Add From Paste that finds/creates the right
+  // template slot, extracts+merges keywords, and pre-tags Name/Term
+  // labels. Pulled out of applyQuickTemplate so Smart Quick Paste can
+  // target a Sub-Enquiry the user just picked, jumped to, duplicated,
+  // or created, rather than always the one currently open in the tree.
+  function fileQuickPasteOnSub(subId, parsedInput) {
+    const sub = subId ? state.subEnquiries[subId] : null;
+    if (!sub) return { ok: false, message: 'Select a Sub-Enquiry in the Hierarchy first.' };
+    const { enquiryText, templateText, templateHtml, templateLinks } = parsedInput;
 
     const templates = subTemplates(sub);
     let tpl = templates.find((t) => !t.template || !t.template.trim());
@@ -2425,6 +2426,351 @@
         '. Review the template box, then click Save template.'
     };
   }
+
+  // Quick Add From Paste always targets whichever Sub-Enquiry is
+  // currently selected in the tree — thin wrapper over the shared
+  // parse + file steps above.
+  function applyQuickTemplate(raw, html, ignoreMiddle) {
+    const subId = state.selectedSubEnquiryId;
+    if (!subId || !state.subEnquiries[subId]) {
+      return { ok: false, message: 'Select a Sub-Enquiry in the Hierarchy first.' };
+    }
+    const parsedInput = parseQuickPasteInput(raw, html, ignoreMiddle);
+    if (!parsedInput) {
+      return {
+        ok: false,
+        message: 'Couldn\u2019t find a tab character or a 2nd \u201cDear\u201d to split the enquiry from the reply \u2014 paste the raw text copied straight from the table row.'
+      };
+    }
+    return fileQuickPasteOnSub(subId, parsedInput);
+  }
+
+  // ============================================================
+  // Smart Quick Paste — like Quick Add From Paste, but doesn't require
+  // a Sub-Enquiry to already be selected: it finds one for you.
+  //
+  // Same two-column paste, same enquiry/reply split, then two ranked
+  // passes over every existing template, each capped at the top 3
+  // Sub-Enquiries:
+  //   1. the enquiry text's keywords vs. every template's own filed
+  //      keywords (extractKeywords vs. tpl.keywords);
+  //   2. only if that draws a total blank, the reply text's keywords
+  //      vs. every template's actual body text instead (extractKeywords
+  //      run on tpl.template on the fly, same as the Deep Thinking
+  //      Search index) — catches templates that were never tagged with
+  //      keywords but whose wording is clearly related.
+  // If neither pass finds anything, falls back to a single best-guess
+  // Sub-Enquiry (whichever is currently selected, or the most recently
+  // created one) so there's always somewhere to jump to.
+  //
+  // Each suggestion offers three ways to file the new template:
+  //   - Jump to it and file the template there directly;
+  //   - Duplicate it (blank copy, same parent Enquiry) and file there;
+  //   - or, independent of the suggestions, create a brand new
+  //     Sub-Enquiry under any Enquiry and file there instead.
+  // ============================================================
+
+  let smartQpEl = null;
+  let smartQpParsed = null;
+  let smartQpPass = null;
+
+  function matchSubsByTemplateKeywords(keywords) {
+    if (!keywords.length) return [];
+    const bySub = new Map();
+    Object.values(state.subEnquiries).forEach((sub) => {
+      subTemplates(sub).forEach((tpl) => {
+        const { score, matched } = keywordOverlapScore(keywords, tpl.keywords || []);
+        if (score <= 0) return;
+        const existing = bySub.get(sub.id);
+        if (!existing || score > existing.score) bySub.set(sub.id, { sub, score, matched });
+      });
+    });
+    return Array.from(bySub.values()).sort((a, b) =>
+      b.score - a.score || pathForSubEnquiry(a.sub.id).localeCompare(pathForSubEnquiry(b.sub.id)));
+  }
+
+  function matchSubsByTemplateBody(keywords) {
+    if (!keywords.length) return [];
+    const bySub = new Map();
+    Object.values(state.subEnquiries).forEach((sub) => {
+      subTemplates(sub).forEach((tpl) => {
+        if (!tpl.template) return;
+        const { score, matched } = keywordOverlapScore(keywords, extractKeywords(tpl.template));
+        if (score <= 0) return;
+        const existing = bySub.get(sub.id);
+        if (!existing || score > existing.score) bySub.set(sub.id, { sub, score, matched });
+      });
+    });
+    return Array.from(bySub.values()).sort((a, b) =>
+      b.score - a.score || pathForSubEnquiry(a.sub.id).localeCompare(pathForSubEnquiry(b.sub.id)));
+  }
+
+  // Best-guess Sub-Enquiry when neither keyword pass found anything at
+  // all to match on — whichever Sub-Enquiry is currently selected in
+  // the Hierarchy, or failing that the most recently created one.
+  function fallbackSubEnquiry() {
+    const selected = state.selectedSubEnquiryId ? state.subEnquiries[state.selectedSubEnquiryId] : null;
+    if (selected) return selected;
+    const ids = Object.keys(state.subEnquiries);
+    return ids.length ? state.subEnquiries[ids[ids.length - 1]] : null;
+  }
+
+  // { matches, pass, keywords } — pass is 'keywords', 'body', or
+  // 'fallback', matching the three tiers described above.
+  function computeSmartQuickPasteMatches(enquiryText, templateText) {
+    const enquiryKeywords = extractKeywords(enquiryText);
+    let matches = matchSubsByTemplateKeywords(enquiryKeywords);
+    if (matches.length) return { matches: matches.slice(0, 3), pass: 'keywords', keywords: enquiryKeywords };
+
+    const replyKeywords = extractKeywords(templateText);
+    matches = matchSubsByTemplateBody(replyKeywords);
+    if (matches.length) return { matches: matches.slice(0, 3), pass: 'body', keywords: replyKeywords };
+
+    const fallback = fallbackSubEnquiry();
+    return {
+      matches: fallback ? [{ sub: fallback, score: 0, matched: [] }] : [],
+      pass: 'fallback',
+      keywords: []
+    };
+  }
+
+  // Jumps the whole Hierarchy/Tag view over to `subId`, then runs the
+  // shared file-a-template step against whatever's now selected.
+  function fileSmartQuickPasteOn(subId) {
+    if (window.Summit && window.Summit.draft && window.Summit.draft.focusSubEnquiry) {
+      window.Summit.draft.focusSubEnquiry(subId);
+    } else {
+      state.selectedSubEnquiryId = subId;
+      renderAll();
+    }
+    return fileQuickPasteOnSub(subId, smartQpParsed);
+  }
+
+  function ensureSmartQuickPasteModal() {
+    if (smartQpEl) return smartQpEl;
+
+    const modal = document.createElement('div');
+    modal.className = 'summit-modal draft-smartqp';
+    modal.id = 'draft-smartqp-modal';
+    modal.hidden = true;
+    modal.setAttribute('aria-hidden', 'true');
+    modal.innerHTML =
+      '<div class="summit-modal__backdrop" data-smartqp-close></div>' +
+      '<div class="summit-modal__panel draft-smartqp__panel" role="dialog" aria-modal="true" aria-labelledby="draft-smartqp-title">' +
+        '<div class="summit-modal__header">' +
+          '<h2 class="summit-modal__title" id="draft-smartqp-title">Smart quick paste</h2>' +
+          '<button type="button" class="summit-modal__close" data-smartqp-close aria-label="Close">\u2715</button>' +
+        '</div>' +
+        '<p class="draft-search-help">Paste the same two-column block as Quick add from paste \u2014 no need to select a Sub-Enquiry first. This finds the best matches for you, or lets you create one.</p>' +
+        '<label class="draft-name-helper__check draft-quicktpl__ignoremid" for="draft-smartqp-ignoremiddle">' +
+          '<input type="checkbox" id="draft-smartqp-ignoremiddle" />' +
+          ' Ignore middle column' +
+        '</label>' +
+        '<textarea class="draft-textarea" id="draft-smartqp-input" placeholder="Paste the raw enquiry + reply block here\u2026" aria-label="Raw enquiry and reply text to parse"></textarea>' +
+        '<div class="summit-modal__actions">' +
+          '<button type="button" class="summit-btn" data-smartqp-close>Cancel</button>' +
+          '<button type="button" class="summit-btn summit-btn--primary" id="draft-smartqp-find-btn">Find matching Sub-Enquiries</button>' +
+        '</div>' +
+        '<p class="draft-template-status" id="draft-smartqp-status" aria-live="polite"></p>' +
+        '<div id="draft-smartqp-results"></div>' +
+        '<div class="draft-smartqp__elsewhere" id="draft-smartqp-elsewhere" hidden>' +
+          '<h3 class="draft-col__subtitle">Or create a new Sub-Enquiry elsewhere</h3>' +
+          '<div class="draft-file-row">' +
+            '<select class="summit-select" id="draft-smartqp-enquiry-select" aria-label="Enquiry to create the new Sub-Enquiry under"></select>' +
+            '<input type="text" class="draft-search-input" id="draft-smartqp-newname" placeholder="New Sub-Enquiry name\u2026" aria-label="New Sub-Enquiry name">' +
+          '</div>' +
+          '<button type="button" class="summit-btn" id="draft-smartqp-create-btn">Create &amp; file template here</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+
+    const inputEl = modal.querySelector('#draft-smartqp-input');
+    const ignoreMiddleEl = modal.querySelector('#draft-smartqp-ignoremiddle');
+    const findBtn = modal.querySelector('#draft-smartqp-find-btn');
+    const statusEl = modal.querySelector('#draft-smartqp-status');
+    const resultsEl = modal.querySelector('#draft-smartqp-results');
+    const elsewhereEl = modal.querySelector('#draft-smartqp-elsewhere');
+    const enquirySelectEl = modal.querySelector('#draft-smartqp-enquiry-select');
+    const newNameEl = modal.querySelector('#draft-smartqp-newname');
+    const createBtn = modal.querySelector('#draft-smartqp-create-btn');
+
+    // Mirrors Quick Template Adder's own siphon of the paste event's
+    // richer text/html representation, kept independent per-modal.
+    let justPastedHtml = false;
+    let lastHtml = '';
+    inputEl.addEventListener('paste', (e) => {
+      const cd = e.clipboardData || window.clipboardData;
+      const html = cd && cd.getData('text/html');
+      lastHtml = html || '';
+      justPastedHtml = true;
+    });
+    inputEl.addEventListener('input', () => {
+      if (justPastedHtml) { justPastedHtml = false; return; }
+      lastHtml = '';
+    });
+
+    function renderCard(match, pass) {
+      const card = document.createElement('div');
+      card.className = 'draft-result';
+      card.setAttribute('role', 'listitem');
+
+      const header = document.createElement('div');
+      header.className = 'draft-result__header';
+      const path = document.createElement('p');
+      path.className = 'draft-result__path';
+      path.textContent = pathForSubEnquiry(match.sub.id);
+      header.appendChild(path);
+      const badge = document.createElement('span');
+      badge.className = 'draft-result__score';
+      badge.textContent = pass === 'fallback'
+        ? 'Best guess \u2014 no keyword match found'
+        : Math.round(match.score * 100) + '% match \u2022 ' + match.matched.length + ' keyword' + (match.matched.length === 1 ? '' : 's') +
+          (pass === 'body' ? ' (from reply text)' : '');
+      header.appendChild(badge);
+      card.appendChild(header);
+
+      if (match.matched && match.matched.length) {
+        const kwWrap = document.createElement('div');
+        kwWrap.className = 'draft-result__keywords';
+        renderKeywordChips(kwWrap, document.createElement('span'), match.matched, {});
+        card.appendChild(kwWrap);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'draft-result__actions';
+
+      const jumpBtn = document.createElement('button');
+      jumpBtn.type = 'button';
+      jumpBtn.className = 'summit-btn summit-btn--primary';
+      jumpBtn.textContent = 'Jump here & file template';
+      jumpBtn.addEventListener('click', () => {
+        const result = fileSmartQuickPasteOn(match.sub.id);
+        finishSmartQuickPaste(result);
+      });
+      actions.appendChild(jumpBtn);
+
+      const dupBtn = document.createElement('button');
+      dupBtn.type = 'button';
+      dupBtn.className = 'summit-btn';
+      dupBtn.textContent = 'Duplicate this Sub-Enquiry & file there';
+      dupBtn.addEventListener('click', () => {
+        if (!window.Summit || !window.Summit.draft || !window.Summit.draft.duplicateSubEnquiry) return;
+        const newId = window.Summit.draft.duplicateSubEnquiry(match.sub.id, { withContents: false });
+        if (!newId) { statusEl.textContent = 'Couldn\u2019t duplicate \u2014 that Sub-Enquiry may have been removed.'; return; }
+        const result = fileSmartQuickPasteOn(newId);
+        finishSmartQuickPaste(result);
+      });
+      actions.appendChild(dupBtn);
+
+      card.appendChild(actions);
+      return card;
+    }
+
+    function refreshElsewherePicker() {
+      enquirySelectEl.innerHTML = '';
+      Object.keys(state.enquiries)
+        .map((id) => ({ id, name: state.enquiries[id].name, path: pathForEnquiry(id) }))
+        .sort((a, b) => a.path.localeCompare(b.path))
+        .forEach((e) => {
+          const opt = document.createElement('option');
+          opt.value = e.id;
+          opt.textContent = e.path;
+          enquirySelectEl.appendChild(opt);
+        });
+      createBtn.disabled = enquirySelectEl.options.length === 0;
+    }
+
+    function finishSmartQuickPaste(result) {
+      statusEl.textContent = result.message;
+      statusEl.classList.toggle('is-saved', result.ok);
+      if (result.ok) {
+        showToast(result.message);
+        closeSmartQuickPasteModal();
+      }
+    }
+
+    findBtn.addEventListener('click', () => {
+      const raw = inputEl.value;
+      if (!raw || !raw.trim()) {
+        statusEl.textContent = 'Paste some text first.';
+        statusEl.classList.remove('is-saved');
+        return;
+      }
+      const parsedInput = parseQuickPasteInput(raw, lastHtml, ignoreMiddleEl.checked);
+      if (!parsedInput) {
+        statusEl.textContent = 'Couldn\u2019t find a tab character or a 2nd \u201cDear\u201d to split the enquiry from the reply \u2014 paste the raw text copied straight from the table row.';
+        statusEl.classList.remove('is-saved');
+        resultsEl.innerHTML = '';
+        elsewhereEl.hidden = true;
+        return;
+      }
+      smartQpParsed = parsedInput;
+      const { matches, pass } = computeSmartQuickPasteMatches(parsedInput.enquiryText, parsedInput.templateText);
+      smartQpPass = pass;
+
+      resultsEl.innerHTML = '';
+      if (!matches.length) {
+        statusEl.textContent = 'No Sub-Enquiries exist yet \u2014 create one below to file this template.';
+      } else {
+        statusEl.textContent = pass === 'keywords'
+          ? 'Matched on the enquiry text\u2019s keywords.'
+          : pass === 'body'
+            ? 'No keyword tags matched \u2014 these matched on the reply text against existing template wording instead.'
+            : 'No keyword or wording match found \u2014 here\u2019s a best guess.';
+        statusEl.classList.remove('is-saved');
+        matches.forEach((m) => resultsEl.appendChild(renderCard(m, pass)));
+      }
+
+      refreshElsewherePicker();
+      elsewhereEl.hidden = false;
+    });
+
+    createBtn.addEventListener('click', () => {
+      const enquiryId = enquirySelectEl.value;
+      if (!enquiryId) { statusEl.textContent = 'No Enquiry to create the Sub-Enquiry under yet.'; return; }
+      if (!smartQpParsed) { statusEl.textContent = 'Click \u201cFind matching Sub-Enquiries\u201d first.'; return; }
+      const name = (newNameEl.value || '').trim() || smartQpParsed.enquiryText.slice(0, 40).trim() || 'New Sub-Enquiry';
+      const newId = createSubEnquiry(enquiryId, name);
+      const result = fileSmartQuickPasteOn(newId);
+      finishSmartQuickPaste(result);
+    });
+
+    modal.querySelectorAll('[data-smartqp-close]').forEach((el) => {
+      el.addEventListener('click', closeSmartQuickPasteModal);
+    });
+
+    smartQpEl = modal;
+    smartQpEl._input = inputEl;
+    smartQpEl._status = statusEl;
+    smartQpEl._results = resultsEl;
+    smartQpEl._elsewhere = elsewhereEl;
+    return modal;
+  }
+
+  function openSmartQuickPasteModal() {
+    const modal = ensureSmartQuickPasteModal();
+    modal._input.value = '';
+    modal._status.textContent = '';
+    modal._status.classList.remove('is-saved');
+    modal._results.innerHTML = '';
+    modal._elsewhere.hidden = true;
+    smartQpParsed = null;
+    smartQpPass = null;
+    modal.hidden = false;
+    modal.setAttribute('aria-hidden', 'false');
+    modal._input.focus();
+  }
+
+  function closeSmartQuickPasteModal() {
+    if (!smartQpEl) return;
+    smartQpEl.hidden = true;
+    smartQpEl.setAttribute('aria-hidden', 'true');
+  }
+
+  if (smartQuickPasteBtn) smartQuickPasteBtn.addEventListener('click', openSmartQuickPasteModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && smartQpEl && !smartQpEl.hidden) closeSmartQuickPasteModal();
+  });
 
   // ---------- Template Labellers ----------
   // Every template can carry any number of free-text tags (a person's
