@@ -1679,6 +1679,22 @@
   // selected (see renderDetail).
   let activeTemplateId = null;
 
+  // Quick Add From Paste / Smart Quick Paste write the pasted reply
+  // straight into the live editor box (fileQuickPasteOnSub) without
+  // saving it onto the template yet — "review before Save template"
+  // is the whole point. That's invisible for Quick Add From Paste
+  // (no navigation happens afterwards), but Smart Quick Paste's
+  // Jump/Duplicate/Create actions call focusSubEnquiry(), which
+  // switches tabs and can trigger another renderDetail() behind the
+  // scenes — and that reloads the editor from the template's real
+  // (still-blank, unsaved) .template, silently wiping the pasted text
+  // that was only ever sitting in the DOM. Tracks which template's
+  // editor content is an unsaved paste so renderDetail() knows not to
+  // stomp on it; cleared the moment the user actually navigates away
+  // from that template (at which point losing the unsaved preview is
+  // correct) or saves it (see templateSaveBtn's click handler).
+  let pendingUnsavedPasteTplId = null;
+
   function renderDetail() {
     const subId = state.selectedSubEnquiryId;
     const sub = subId ? state.subEnquiries[subId] : null;
@@ -1724,8 +1740,16 @@
 
     renderTemplateList(sub); // normalizes activeTemplateId first, so...
     const tpl = findTemplateById(sub, activeTemplateId);
+    if (pendingUnsavedPasteTplId && (!tpl || tpl.id !== pendingUnsavedPasteTplId)) {
+      // Navigated away from the template holding the unsaved paste —
+      // stop protecting it, so this (and any future) renderDetail()
+      // call behaves normally again.
+      pendingUnsavedPasteTplId = null;
+    }
     renderLabelChips(templateLabels(tpl).slice(), !!tpl); // ...this loads the right template's own tags
-    renderTemplateIntoEditor(tpl);
+    if (!tpl || tpl.id !== pendingUnsavedPasteTplId) {
+      renderTemplateIntoEditor(tpl);
+    }
     updateTemplateStatus(sub, tpl);
     renderTemplateKeywords(sub, tpl);
   }
@@ -2463,6 +2487,10 @@
 
     renderTemplateList(sub);
     renderTemplateIntoEditor({ template: templateText, templateHtml: templateHtml, templateLinks: templateLinks });
+    // Protect this box from being reloaded-and-blanked by a stray
+    // renderDetail() (e.g. Smart Quick Paste's tab switch) before the
+    // user gets a chance to review and click Save template.
+    pendingUnsavedPasteTplId = tpl.id;
     updateTemplateStatus(sub, tpl);
     renderTemplateKeywords(sub, tpl);
 
@@ -3847,6 +3875,7 @@
     tpl.template = editorPlainText();
     tpl.templateLinks = editorLinks();
     tpl.templateHtml = sanitizeEditorHtml();
+    if (pendingUnsavedPasteTplId === tpl.id) pendingUnsavedPasteTplId = null;
     commitPendingLabelInput();
     tpl.labels = pendingLabels.slice();
     recordLabelUsage(tpl.labels);
