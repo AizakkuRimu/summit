@@ -96,6 +96,8 @@
   const templateBoldBtn = document.getElementById('draft-template-bold-btn');
   const templateItalicBtn = document.getElementById('draft-template-italic-btn');
   const templateUnderlineBtn = document.getElementById('draft-template-underline-btn');
+  const templateBulletBtn = document.getElementById('draft-template-bullet-btn');
+  const templateNumberBtn = document.getElementById('draft-template-number-btn');
   const templateStatus = document.getElementById('draft-template-status');
   const templateKeywordsEl = document.getElementById('draft-template-keywords');
   const templateKeywordsClearBtn = document.getElementById('draft-template-keywords-clear-btn');
@@ -1679,6 +1681,12 @@
   // selected (see renderDetail).
   let activeTemplateId = null;
 
+  // Which folder (by templateFolderKey) is expanded per Sub-Enquiry —
+  // only one open at a time, closed folders just hide their chips row.
+  // Reset to "the folder holding the active template" whenever it's
+  // missing/stale for the Sub-Enquiry currently being rendered.
+  const openFolderBySub = {};
+
   // Quick Add From Paste / Smart Quick Paste write the pasted reply
   // straight into the live editor box (fileQuickPasteOnSub) without
   // saving it onto the template yet — "review before Save template"
@@ -1868,18 +1876,54 @@
       return;
     }
     const folders = groupTemplatesByFolder(templates);
-    folders.forEach((folder, i) => {
-      const folderEl = document.createElement('div');
-      folderEl.className = 'draft-template-folder';
 
-      // Always labelled — "Folder 1", "Folder 2"... — so the grouping
-      // itself is visible even when everything's still untagged and
-      // there's only the one folder so far.
-      const heading = document.createElement('p');
+    // Work out which folder should be open for this Sub-Enquiry. Falls
+    // back to whichever folder holds the active template if there's no
+    // stored choice yet, or the stored one no longer exists (folders
+    // are derived from tag combos, so they can appear/disappear as
+    // templates get re-tagged).
+    const folderKeys = folders.map((f) => templateFolderKey(f.labels));
+    if (!folderKeys.includes(openFolderBySub[sub.id])) {
+      const activeFolder = folders.find((f) => f.templates.some((t) => t.id === activeTemplateId));
+      openFolderBySub[sub.id] = activeFolder ? templateFolderKey(activeFolder.labels) : (folderKeys[0] || null);
+    }
+
+    folders.forEach((folder, i) => {
+      const key = templateFolderKey(folder.labels);
+      const isOpen = openFolderBySub[sub.id] === key;
+
+      const folderEl = document.createElement('div');
+      folderEl.className = 'draft-template-folder' + (isOpen ? ' is-open' : '');
+
+      // Clickable header — always labelled "Folder 1", "Folder 2"...
+      // so the grouping itself is visible even when everything's still
+      // untagged and there's only the one folder so far. Clicking opens
+      // this folder and closes whichever one was open before; clicking
+      // the already-open folder collapses it.
+      const header = document.createElement('button');
+      header.type = 'button';
+      header.className = 'draft-template-folder__header';
+      header.setAttribute('aria-expanded', String(isOpen));
+
+      const heading = document.createElement('span');
       heading.className = 'draft-template-folder__label';
       heading.textContent = 'Folder ' + (i + 1) + ' \u2014 ' +
-        (folder.labels.length ? folder.labels.map((l) => '#' + l).join(' ') : 'No tags');
-      folderEl.appendChild(heading);
+        (folder.labels.length ? folder.labels.map((l) => '#' + l).join(' ') : 'No tags') +
+        ' (' + folder.templates.length + ')';
+      header.appendChild(heading);
+
+      const chevron = document.createElement('span');
+      chevron.className = 'draft-template-folder__chevron';
+      chevron.setAttribute('aria-hidden', 'true');
+      chevron.textContent = '\u25B8';
+      header.appendChild(chevron);
+
+      header.addEventListener('click', () => {
+        openFolderBySub[sub.id] = isOpen ? null : key;
+        renderTemplateList(sub);
+      });
+
+      folderEl.appendChild(header);
 
       const chipsRow = document.createElement('div');
       chipsRow.className = 'draft-template-folder__chips';
@@ -2070,6 +2114,7 @@
         '</label>' +
         '<p class="draft-search-help draft-quicktpl__ignoremid-hint">For a 3-column paste (enquiry, then a middle column, then the reply) \u2014 skips the middle column, treats the first column as the enquiry and the last as the reply. When the tab is lost, splits at the very last \u201cDear\u201d instead of the 2nd, since the middle column has one too.</p>' +
         '<textarea class="draft-textarea" id="draft-quicktpl-input" placeholder="Paste the raw enquiry + reply block here\u2026" aria-label="Raw enquiry and reply text to parse"></textarea>' +
+        '<p class="draft-live-dup-banner" id="draft-quicktpl-live-dup" aria-live="polite" hidden></p>' +
         '<div class="summit-modal__actions">' +
           '<button type="button" class="summit-btn" data-quicktpl-close>Cancel</button>' +
           '<button type="button" class="summit-btn summit-btn--primary" id="draft-quicktpl-apply-btn">Extract &amp; fill template</button>' +
@@ -2082,6 +2127,7 @@
     const inputEl = modal.querySelector('#draft-quicktpl-input');
     const applyBtn = modal.querySelector('#draft-quicktpl-apply-btn');
     const statusEl = modal.querySelector('#draft-quicktpl-status');
+    const liveDupEl = modal.querySelector('#draft-quicktpl-live-dup');
     const ignoreMiddleEl = modal.querySelector('#draft-quicktpl-ignoremiddle');
 
     // Sticks for the rest of the browser session (sessionStorage, not
@@ -2124,6 +2170,16 @@
       quickTplEl._lastHtml = '';
     });
 
+    // Live duplicate check — fires as soon as text lands in the box,
+    // well before "Extract & fill template" is clicked, so you know
+    // right away whether ~this content already exists somewhere before
+    // deciding it's worth filing at all.
+    const scheduleLiveDupCheck = debounceLiveDuplicateCheck(() => {
+      refreshLiveDuplicateBanner(liveDupEl, inputEl.value, quickTplEl._lastHtml, ignoreMiddleEl.checked);
+    });
+    inputEl.addEventListener('input', scheduleLiveDupCheck);
+    inputEl.addEventListener('paste', scheduleLiveDupCheck);
+
     applyBtn.addEventListener('click', () => {
       const raw = inputEl.value;
       if (!raw || !raw.trim()) {
@@ -2138,6 +2194,7 @@
       if (result.ok) {
         inputEl.value = '';
         quickTplEl._lastHtml = '';
+        hideLiveDuplicateBanner(liveDupEl);
         showToast(result.message);
       }
     });
@@ -2151,6 +2208,7 @@
     quickTplEl._input = inputEl;
     quickTplEl._apply = applyBtn;
     quickTplEl._status = statusEl;
+    quickTplEl._liveDup = liveDupEl;
     quickTplEl._ignoreMiddle = ignoreMiddleEl;
     quickTplEl._lastHtml = '';
     return modal;
@@ -2163,6 +2221,7 @@
     modal._status.textContent = '';
     modal._status.classList.remove('is-saved');
     modal._lastHtml = '';
+    hideLiveDuplicateBanner(modal._liveDup);
     if (sub) {
       modal._target.textContent = 'Will fill the next available template on: ' + pathForSubEnquiry(subId);
       modal._apply.disabled = false;
@@ -2432,6 +2491,48 @@
     return ' \u26A0\uFE0F Potential duplicate \u2014 ' + Math.round(top.similarity * 100) + '% similar to "' + top.tpl.name + '" on ' + pathForSubEnquiry(top.sub.id) + '.';
   }
 
+  // ---------- Live duplicate banner (right off the bat, pre-filing) ----------
+  // Both paste flows above only ever surfaced the 70%-similarity check
+  // *after* you'd already committed the paste to a template slot (a
+  // toast, or a status line under "Extract & fill"/"Find matching
+  // Sub-Enquiries"). This runs the same check the instant text lands in
+  // the paste box, so you can tell before filing anything at all
+  // whether it's likely already covered somewhere.
+  function hideLiveDuplicateBanner(bannerEl) {
+    if (!bannerEl) return;
+    bannerEl.hidden = true;
+    bannerEl.textContent = '';
+  }
+
+  function refreshLiveDuplicateBanner(bannerEl, raw, html, ignoreMiddle) {
+    if (!bannerEl) return;
+    const text = (raw || '').trim();
+    if (!text) { hideLiveDuplicateBanner(bannerEl); return; }
+    // Try to isolate just the reply portion (what actually gets
+    // compared against existing templates) — falls back to the whole
+    // pasted block when no enquiry/reply split can be found yet, so
+    // the check still works before the paste is "complete" enough to
+    // parse cleanly.
+    const parsed = parseQuickPasteInput(raw, html, ignoreMiddle);
+    const templateText = parsed ? parsed.templateText : text;
+    const duplicates = findPotentialDuplicateTemplates(templateText, null);
+    if (!duplicates.length) { hideLiveDuplicateBanner(bannerEl); return; }
+    const top = duplicates[0];
+    bannerEl.hidden = false;
+    bannerEl.textContent = '\u26A0\uFE0F ' + Math.round(top.similarity * 100) + '% match already exists \u2014 "' +
+      top.tpl.name + '" on ' + pathForSubEnquiry(top.sub.id) + '. You may not need to file this one.';
+  }
+
+  // Light debounce (180ms) so fast typing/pasting doesn't run the
+  // keyword-overlap scan against every template on every keystroke.
+  function debounceLiveDuplicateCheck(fn) {
+    let timer = null;
+    return function () {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(fn, 180);
+    };
+  }
+
   // Files a parsed enquiry/reply pair onto a specific Sub-Enquiry —
   // the part of Quick Add From Paste that finds/creates the right
   // template slot, extracts+merges keywords, and pre-tags Name/Term
@@ -2661,6 +2762,7 @@
           ' Ignore middle column' +
         '</label>' +
         '<textarea class="draft-textarea" id="draft-smartqp-input" placeholder="Paste the raw enquiry + reply block here\u2026" aria-label="Raw enquiry and reply text to parse"></textarea>' +
+        '<p class="draft-live-dup-banner" id="draft-smartqp-live-dup" aria-live="polite" hidden></p>' +
         '<div class="summit-modal__actions">' +
           '<button type="button" class="summit-btn" data-smartqp-close>Cancel</button>' +
           '<button type="button" class="summit-btn summit-btn--primary" id="draft-smartqp-find-btn">Find matching Sub-Enquiries</button>' +
@@ -2689,6 +2791,7 @@
     const ignoreMiddleEl = modal.querySelector('#draft-smartqp-ignoremiddle');
     const findBtn = modal.querySelector('#draft-smartqp-find-btn');
     const statusEl = modal.querySelector('#draft-smartqp-status');
+    const liveDupEl = modal.querySelector('#draft-smartqp-live-dup');
     const resultsEl = modal.querySelector('#draft-smartqp-results');
     const elsewhereEl = modal.querySelector('#draft-smartqp-elsewhere');
     const enquirySelectEl = modal.querySelector('#draft-smartqp-enquiry-select');
@@ -2717,6 +2820,15 @@
       if (justPastedHtml) { justPastedHtml = false; return; }
       lastHtml = '';
     });
+
+    // Same live "right off the bat" duplicate check as Quick Template
+    // Adder — fires before "Find matching Sub-Enquiries" is even
+    // clicked.
+    const scheduleLiveDupCheck = debounceLiveDuplicateCheck(() => {
+      refreshLiveDuplicateBanner(liveDupEl, inputEl.value, lastHtml, ignoreMiddleEl.checked);
+    });
+    inputEl.addEventListener('input', scheduleLiveDupCheck);
+    inputEl.addEventListener('paste', scheduleLiveDupCheck);
 
     function renderCard(match, pass, isDuplicateHere) {
       const card = document.createElement('div');
@@ -2819,6 +2931,7 @@
       statusEl.classList.toggle('is-saved', result.ok);
       statusEl.classList.toggle('has-duplicate-warning', !!(result.duplicates && result.duplicates.length));
       if (result.ok) {
+        hideLiveDuplicateBanner(liveDupEl);
         showToast(result.message);
         closeSmartQuickPasteModal();
       }
@@ -2919,6 +3032,7 @@
     smartQpEl._status = statusEl;
     smartQpEl._results = resultsEl;
     smartQpEl._elsewhere = elsewhereEl;
+    smartQpEl._liveDup = liveDupEl;
     return modal;
   }
 
@@ -2929,6 +3043,7 @@
     modal._status.classList.remove('is-saved');
     modal._results.innerHTML = '';
     modal._elsewhere.hidden = true;
+    hideLiveDuplicateBanner(modal._liveDup);
     smartQpParsed = null;
     smartQpPass = null;
     modal.hidden = false;
@@ -3654,6 +3769,117 @@
   if (templateItalicBtn) templateItalicBtn.addEventListener('click', () => { templateInput.focus(); document.execCommand('italic'); });
   if (templateUnderlineBtn) templateUnderlineBtn.addEventListener('click', () => { templateInput.focus(); document.execCommand('underline'); });
 
+  // ---------- Bullet / numbered lines ----------
+  // This editor's model is deliberately flat text + inline B/I/U/A (see
+  // wireRichTextEditing's comment below) — and pasting an actual
+  // <ul>/<ol> from Word already gets flattened the same way, each <li>
+  // becoming its own "\u2022 "/"N. "-prefixed line (see
+  // htmlToTemplateFragment). So "toggle bullet/numbering" here just
+  // toggles that same literal prefix on the line the caret's on, rather
+  // than building a real list structure — which means it costs nothing
+  // extra anywhere else a template's content flows to (Peaks insertion,
+  // Word export, search, keyword matching, the plain-text Expand view):
+  // a bulleted line is just a line of text there too. The trade-off is
+  // that these are markers, not a real numbered list — deleting/
+  // reordering lines doesn't renumber anything automatically.
+  const BULLET_PREFIX = '\u2022 ';
+  const NUMBER_PREFIX_RE = /^\d+\.\s/;
+  const BULLET_PREFIX_RE = /^\u2022 /;
+
+  // Selection.modify (line-boundary movement) is non-standard but
+  // widely supported (Chromium, Firefox, Safari); toggleLinePrefix
+  // below no-ops without it rather than risk mangling the line with
+  // cruder boundary-finding.
+  const SUPPORTS_SELECTION_MODIFY = typeof window.getSelection === 'function' &&
+    typeof Selection !== 'undefined' && typeof Selection.prototype.modify === 'function';
+
+  // Collapses `el`'s current selection to the start of its visual line,
+  // returning the live Selection, or null if the selection isn't inside
+  // `el` at all.
+  function collapseToLineStart(el) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) return null;
+    const collapsed = sel.getRangeAt(0).cloneRange();
+    collapsed.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(collapsed);
+    sel.modify('move', 'backward', 'lineboundary');
+    return sel;
+  }
+
+  // Reads the current line's text (extends to line end, then restores
+  // the selection collapsed back at the line start).
+  function lineTextAndRecollapse(sel) {
+    const atStart = sel.getRangeAt(0).cloneRange();
+    sel.modify('extend', 'forward', 'lineboundary');
+    const text = sel.getRangeAt(0).toString();
+    const restore = atStart.cloneRange();
+    restore.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(restore);
+    return text;
+  }
+
+  // Best-effort look at the previous line's text, to continue a
+  // numbered run — steps one character left across the line break,
+  // reads that line, then restores the selection to where it started.
+  // Falls back to "start at 1" for anything that doesn't fit cleanly
+  // (first line, previous line not numbered, etc.).
+  function previousLineText(originalCollapsed) {
+    const sel = window.getSelection();
+    sel.modify('move', 'backward', 'character');
+    sel.modify('move', 'backward', 'lineboundary');
+    sel.modify('extend', 'forward', 'lineboundary');
+    const text = sel.getRangeAt(0).toString();
+    const restore = originalCollapsed.cloneRange();
+    restore.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(restore);
+    return text;
+  }
+
+  function nextNumberPrefix(sel) {
+    const originalCollapsed = sel.getRangeAt(0).cloneRange();
+    const prevText = previousLineText(originalCollapsed);
+    const m = NUMBER_PREFIX_RE.exec(prevText);
+    const n = m ? parseInt(m[0], 10) + 1 : 1;
+    return n + '. ';
+  }
+
+  // Toggles a bullet or numbered marker on the line the caret/selection
+  // start is on. Only ever touches the exact prefix text at the very
+  // start of that one line, leaving the rest of the line's own
+  // bold/italic/underline/link formatting untouched. Multi-line
+  // selections only affect the first line touched — same simplification
+  // the rest of this editor's toolbar makes (Bold/Italic/Underline do
+  // act on a full multi-line selection via execCommand, but list
+  // toggling needing per-line boundary detection is a fundamentally
+  // different operation).
+  function toggleLinePrefix(el, kind) {
+    el.focus();
+    if (!SUPPORTS_SELECTION_MODIFY) return;
+    const sel = collapseToLineStart(el);
+    if (!sel) return;
+    const lineText = lineTextAndRecollapse(sel);
+    const hasBullet = BULLET_PREFIX_RE.test(lineText);
+    const numberMatch = NUMBER_PREFIX_RE.exec(lineText);
+    const existingLen = hasBullet ? BULLET_PREFIX.length : (numberMatch ? numberMatch[0].length : 0);
+
+    if (existingLen > 0) {
+      for (let i = 0; i < existingLen; i++) sel.modify('extend', 'forward', 'character');
+      document.execCommand('delete');
+    }
+
+    const togglingOffSameKind = (kind === 'bullet' && hasBullet) || (kind === 'number' && !!numberMatch);
+    if (togglingOffSameKind) return;
+
+    const prefix = kind === 'bullet' ? BULLET_PREFIX : nextNumberPrefix(sel);
+    document.execCommand('insertText', false, prefix);
+  }
+
+  if (templateBulletBtn) templateBulletBtn.addEventListener('click', () => toggleLinePrefix(templateInput, 'bullet'));
+  if (templateNumberBtn) templateNumberBtn.addEventListener('click', () => toggleLinePrefix(templateInput, 'number'));
+
   // Attaches the same paste-cleanup + Ctrl+B/I/U + Enter\u2192<br> handling
   // used by the main Tag view template editor to any contenteditable
   // element — used for the main templateInput and for the inline
@@ -3745,6 +3971,8 @@
   const templateExpandItalicBtn = document.getElementById('draft-template-expand-italic-btn');
   const templateExpandUnderlineBtn = document.getElementById('draft-template-expand-underline-btn');
   const templateExpandLinkBtn = document.getElementById('draft-template-expand-link-btn');
+  const templateExpandBulletBtn = document.getElementById('draft-template-expand-bullet-btn');
+  const templateExpandNumberBtn = document.getElementById('draft-template-expand-number-btn');
 
   // HTML (from templateInput.innerHTML) -> marker plain text.
   // Reuses htmlToSegments (already the canonical HTML -> flat
@@ -3874,6 +4102,44 @@
     if (templateExpandBoldBtn) templateExpandBoldBtn.addEventListener('click', () => wrapSelection('\u27e6B\u27e7', '\u27e6/B\u27e7', 'bold text'));
     if (templateExpandItalicBtn) templateExpandItalicBtn.addEventListener('click', () => wrapSelection('\u27e6I\u27e7', '\u27e6/I\u27e7', 'italic text'));
     if (templateExpandUnderlineBtn) templateExpandUnderlineBtn.addEventListener('click', () => wrapSelection('\u27e6U\u27e7', '\u27e6/U\u27e7', 'underlined text'));
+
+    // Same literal "\u2022 "/"N. " prefix as the main editor's bullet
+    // buttons (see toggleLinePrefix above) — here it's plain string
+    // splicing on the textarea's own line, since there's no DOM
+    // selection to manage in a <textarea>.
+    function toggleTextareaLinePrefix(textarea, kind) {
+      const value = textarea.value;
+      const caret = textarea.selectionStart;
+      const lineStart = value.lastIndexOf('\n', caret - 1) + 1;
+      let lineEnd = value.indexOf('\n', caret);
+      if (lineEnd === -1) lineEnd = value.length;
+      const line = value.slice(lineStart, lineEnd);
+
+      const hasBullet = BULLET_PREFIX_RE.test(line);
+      const numberMatch = NUMBER_PREFIX_RE.exec(line);
+      const rest = hasBullet ? line.slice(BULLET_PREFIX.length) : (numberMatch ? line.slice(numberMatch[0].length) : line);
+
+      const togglingOffSameKind = (kind === 'bullet' && hasBullet) || (kind === 'number' && !!numberMatch);
+      let newLine;
+      if (togglingOffSameKind) {
+        newLine = rest;
+      } else if (kind === 'bullet') {
+        newLine = BULLET_PREFIX + rest;
+      } else {
+        const prevLineEnd = lineStart > 0 ? lineStart - 1 : -1;
+        const prevLineStart = prevLineEnd >= 0 ? value.lastIndexOf('\n', prevLineEnd - 1) + 1 : 0;
+        const prevLine = prevLineEnd >= 0 ? value.slice(prevLineStart, prevLineEnd) : '';
+        const prevMatch = NUMBER_PREFIX_RE.exec(prevLine);
+        const n = prevMatch ? parseInt(prevMatch[0], 10) + 1 : 1;
+        newLine = n + '. ' + rest;
+      }
+
+      textarea.setRangeText(newLine, lineStart, lineEnd, 'preserve');
+      textarea.focus();
+    }
+
+    if (templateExpandBulletBtn) templateExpandBulletBtn.addEventListener('click', () => toggleTextareaLinePrefix(templateExpandInput, 'bullet'));
+    if (templateExpandNumberBtn) templateExpandNumberBtn.addEventListener('click', () => toggleTextareaLinePrefix(templateExpandInput, 'number'));
     if (templateExpandLinkBtn) {
       templateExpandLinkBtn.addEventListener('click', () => {
         const start = templateExpandInput.selectionStart;
@@ -4502,6 +4768,8 @@
       toolbar.appendChild(makeToolBtn('<b>B</b>', 'Bold (Ctrl+B)', () => { editorBox.focus(); document.execCommand('bold'); }));
       toolbar.appendChild(makeToolBtn('<i>I</i>', 'Italic (Ctrl+I)', () => { editorBox.focus(); document.execCommand('italic'); }));
       toolbar.appendChild(makeToolBtn('<u>U</u>', 'Underline (Ctrl+U)', () => { editorBox.focus(); document.execCommand('underline'); }));
+      toolbar.appendChild(makeToolBtn('\u2022', 'Toggle bullet on this line', () => toggleLinePrefix(editorBox, 'bullet')));
+      toolbar.appendChild(makeToolBtn('1.', 'Toggle numbering on this line', () => toggleLinePrefix(editorBox, 'number')));
       toolbar.appendChild(makeToolBtn('Insert link', 'Insert a link at the cursor', () => {
         const sel = window.getSelection();
         const selectedText = (sel && sel.rangeCount && editorBox.contains(sel.anchorNode)) ? sel.toString() : '';
@@ -6362,6 +6630,59 @@
       });
       results.sort((a, b) => b.score - a.score);
       return results.slice(0, cap);
+    },
+
+    // Exact (case-insensitive, trimmed) Sub-Enquiry name lookup —
+    // Section 3's Peaks letter generation uses this to work out which
+    // Sub-Enquiry a matched cell's text refers to. Returns the id, or
+    // null if no Sub-Enquiry has that exact name.
+    findSubEnquiryByName(name) {
+      const target = (name || '').trim().toLowerCase();
+      if (!target) return null;
+      const id = Object.keys(state.subEnquiries).find((sid) =>
+        (state.subEnquiries[sid].name || '').trim().toLowerCase() === target);
+      return id || null;
+    },
+
+    // The best-matching template for a Sub-Enquiry, given some free
+    // text to score against (Section 3: the row's case-assessment
+    // cell). A Sub-Enquiry with one template just gets that one; with
+    // several (e.g. split across Name/Term folders), each candidate's
+    // own keywords (the enquiry-side keywords merged in whenever a
+    // reply was filed onto it) are scored against `caseText`'s
+    // keywords using the same Jaccard-style overlap as
+    // matchSubEnquiries. Ties — including "no keywords matched at
+    // all" — are broken at random rather than by array order, so
+    // re-generating doesn't always silently favour the same one.
+    // Returns { id, name, template, templateHtml, templateLinks } or
+    // null if the Sub-Enquiry has no filed template at all.
+    bestTemplateForSubEnquiry(subId, caseText) {
+      const sub = state.subEnquiries[subId];
+      if (!sub) return null;
+      const candidates = subTemplates(sub).filter((t) => t.template && t.template.trim());
+      if (!candidates.length) return null;
+      const pick = (t) => ({
+        id: t.id,
+        name: t.name,
+        template: t.template,
+        templateHtml: t.templateHtml || '',
+        templateLinks: (t.templateLinks || []).map((l) => ({ text: l.text, url: l.url }))
+      });
+      if (candidates.length === 1) return pick(candidates[0]);
+
+      const queryKeywords = extractKeywords(caseText || '');
+      let bestScore = -1;
+      let bestGroup = candidates;
+      if (queryKeywords.length) {
+        const scored = candidates.map((t) => ({
+          t,
+          score: keywordOverlapScore(queryKeywords, t.keywords || []).score
+        }));
+        bestScore = Math.max(...scored.map((s) => s.score));
+        bestGroup = bestScore > 0 ? scored.filter((s) => s.score === bestScore).map((s) => s.t) : candidates;
+      }
+      const winner = bestGroup[Math.floor(Math.random() * bestGroup.length)];
+      return pick(winner);
     },
 
     // Switches to the Draft tab, expands the tree to reveal `id`, and

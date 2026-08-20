@@ -904,20 +904,36 @@
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  // Renders one cell's content as HTML, preserving <a href> links and
-  // explicit line breaks (as <br>) — the counterpart to cellRunsFromNode
-  // below, which reads this same shape back out on paste.
+  // Renders one cell's content as HTML, preserving <a href> links,
+  // <b>/<i>/<u> formatting (arbitrarily nested — e.g. a bold link),
+  // explicit <br> elements, and text nodes' own \n as <br> too. The
+  // counterpart to cellRunsFromNode below, which reads this same shape
+  // back out on paste.
+  function nodeToClipboardHtml(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return escapeHtml(node.textContent).replace(/\n/g, '<br>');
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return escapeHtml(node.textContent || '');
+    const tag = node.tagName;
+    if (tag === 'BR') return '<br>';
+    const inner = Array.from(node.childNodes).map(nodeToClipboardHtml).join('');
+    switch (tag) {
+      case 'A':
+        return '<a href="' + escapeHtml(node.getAttribute('href') || '') + '">' + inner + '</a>';
+      case 'B': case 'STRONG':
+        return '<b>' + inner + '</b>';
+      case 'I': case 'EM':
+        return '<i>' + inner + '</i>';
+      case 'U':
+        return '<u>' + inner + '</u>';
+      default:
+        return inner;
+    }
+  }
+
   function cellInnerHTMLForClipboard(td) {
     let html = '';
-    td.childNodes.forEach((node) => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        html += escapeHtml(node.textContent).replace(/\n/g, '<br>');
-      } else if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'A') {
-        html += '<a href="' + escapeHtml(node.getAttribute('href') || '') + '">' + escapeHtml(node.textContent) + '</a>';
-      } else {
-        html += escapeHtml(node.textContent || '');
-      }
-    });
+    td.childNodes.forEach((node) => { html += nodeToClipboardHtml(node); });
     return html;
   }
 
@@ -945,30 +961,41 @@
     return rows.map((row) => row.split('\t'));
   }
 
-  // Pulls an ordered list of {text, href} runs out of a pasted <td>,
-  // turning <br>/<div>/<p> block breaks into literal "\n" text runs and
-  // <a href> elements into linked runs. This is the read-side counterpart
-  // to cellInnerHTMLForClipboard/selectionToHTML above.
+  // Pulls an ordered list of {text, href, bold, italic, underline} runs
+  // out of a pasted <td>, turning <br>/<div>/<p> block breaks into
+  // literal "\n" text runs, <a href> elements into linked runs, and
+  // carrying accumulated bold/italic/underline state down through
+  // arbitrarily nested <b>/<strong>/<i>/<em>/<u> (e.g. a bold link).
+  // This is the read-side counterpart to cellInnerHTMLForClipboard/
+  // cellInnerHTMLForWordExport above — together they're what makes a
+  // cell's formatting (not just its links) survive a copy/paste round
+  // trip, whether the source is another Peaks cell or an outside app.
   function cellRunsFromNode(node) {
     const runs = [];
-    function walk(n) {
+    function walk(n, fmt) {
       if (n.nodeType === Node.TEXT_NODE) {
-        if (n.textContent) runs.push({ text: n.textContent, href: null });
+        if (n.textContent) runs.push(Object.assign({ text: n.textContent, href: null }, fmt));
         return;
       }
       if (n.nodeType !== Node.ELEMENT_NODE) return;
       const tag = n.tagName;
       if (tag === 'A') {
         const href = n.getAttribute('href') || '';
-        if (n.textContent) runs.push({ text: n.textContent, href });
+        if (n.textContent) runs.push(Object.assign({ text: n.textContent, href }, fmt));
         return;
       }
-      if (tag === 'BR') { runs.push({ text: '\n', href: null }); return; }
+      if (tag === 'BR') { runs.push(Object.assign({ text: '\n', href: null }, fmt)); return; }
+      const nextFmt = {
+        bold: fmt.bold || tag === 'B' || tag === 'STRONG',
+        italic: fmt.italic || tag === 'I' || tag === 'EM',
+        underline: fmt.underline || tag === 'U'
+      };
       const blockLevel = tag === 'DIV' || tag === 'P';
-      n.childNodes.forEach(walk);
-      if (blockLevel && runs.length && runs[runs.length - 1].text !== '\n') runs.push({ text: '\n', href: null });
+      n.childNodes.forEach((c) => walk(c, nextFmt));
+      if (blockLevel && runs.length && runs[runs.length - 1].text !== '\n') runs.push(Object.assign({ text: '\n', href: null }, fmt));
     }
-    node.childNodes.forEach(walk);
+    const baseFmt = { bold: false, italic: false, underline: false };
+    node.childNodes.forEach((n) => walk(n, baseFmt));
     while (runs.length && runs[runs.length - 1].text === '\n') runs.pop();
     return runs;
   }
@@ -995,12 +1022,16 @@
   function writeRunsToCell(td, runs) {
     td.textContent = '';
     runs.forEach((run) => {
+      let node = document.createTextNode(run.text);
+      if (run.underline) { const u = document.createElement('u'); u.appendChild(node); node = u; }
+      if (run.italic) { const i = document.createElement('i'); i.appendChild(node); node = i; }
+      if (run.bold) { const b = document.createElement('b'); b.appendChild(node); node = b; }
       if (run.href) {
         const a = makeLinkEl(run.href);
-        a.textContent = run.text;
+        a.appendChild(node);
         td.appendChild(a);
       } else {
-        td.appendChild(document.createTextNode(run.text));
+        td.appendChild(node);
       }
     });
   }
@@ -2311,9 +2342,25 @@
   // "Prisoner" in L also swaps the referral line's wording, independent
   // of channel. Only the first "Account settings" in the whole letter
   // gets hyperlinked.
+  //
+  // Sub-Enquiry template referencing: row 1 is scanned across every
+  // column (except N itself) for a cell whose text exactly matches a
+  // Sub-Enquiry name filed in Draft > Hierarchy; whichever column that
+  // turns up in is used for every row for the rest of this generate
+  // run. If row 1 has no such match at all, column L is used for
+  // every row instead. Whenever a row's cell in that column matches a
+  // Sub-Enquiry with more than one filed template, column M (the
+  // member's actual enquiry text) is scored against each candidate
+  // template's own keywords to pick the best fit; a tie (including
+  // "no keywords matched") is broken at random. The winning template
+  // — full formatting, hyperlinks included — is inserted between the
+  // referral line/liner and the end-liner. No match at any step just
+  // leaves the letter exactly as it always was.
   // ============================================================
 
   const GEN_COL = { A: 0, B: 1, C: 2, D: 3, E: 4, F: 5, G: 6, H: 7, I: 8, J: 9, K: 10, L: 11, M: 12, N: 13 };
+  const SUBENQUIRY_FALLBACK_COL = 'L';
+  const CASE_TEXT_COL = 'M';
   const ACCOUNT_SETTINGS_URL = 'http://www.cpf.gov.sg/member/ds/account-settings';
   const CONTACT_US_URL = 'https://cpf.gov.sg/membercontactus';
   const CPF_HOMEPAGE_URL = 'https://www.cpf.gov.sg';
@@ -2340,10 +2387,13 @@
   const ENDLINER_HARDCOPY_NONPRISONER = ENDLINER_EMAIL;
   const ENDLINER_HARDCOPY_PRISONER = 'We would be pleased to help if you require further assistance.\nThank you.';
 
-  function genCellText(r, colLetter) {
-    const c = GEN_COL[colLetter];
+  function genCellTextByIndex(r, c) {
     const td = cellsEl[r] && cellsEl[r][c];
     return td ? td.textContent.trim() : '';
+  }
+
+  function genCellText(r, colLetter) {
+    return genCellTextByIndex(r, GEN_COL[colLetter]);
   }
 
   // Formats a date typed in column H (d/m/yyyy, d-m-yyyy, or d.m.yyyy —
@@ -2370,9 +2420,48 @@
     return low.includes('prisoner') && !low.includes('non-prisoner') && !low.includes('non prisoner');
   }
 
-  // Returns the generated letter text for a row, or null if the row has
-  // nothing in D/E/F/H/J/K/L worth generating from.
-  function buildTemplateForRow(r) {
+  // Row 1 (r === 0), every column except N: first cell whose text
+  // exactly matches a filed Sub-Enquiry name. Returns its column
+  // index, or null if nothing in row 1 matches at all.
+  function findSubEnquiryColumn(usedRange) {
+    if (!window.Summit || !window.Summit.draft || !window.Summit.draft.findSubEnquiryByName) return null;
+    for (let c = 0; c < usedRange.cols; c++) {
+      if (c === GEN_COL.N) continue;
+      const text = genCellTextByIndex(0, c);
+      if (!text) continue;
+      if (window.Summit.draft.findSubEnquiryByName(text)) return c;
+    }
+    return null;
+  }
+
+  // Given the row and the (once-per-run) Sub-Enquiry column, works out
+  // which template — if any — should be inserted into this row's
+  // letter. Returns { templateHtml, templateText } (both possibly
+  // null) rather than throwing when Draft's API isn't available, so a
+  // generate run degrades to "no insertion" instead of failing.
+  function matchedTemplateForRow(r, subEnquiryColIndex) {
+    if (!window.Summit || !window.Summit.draft || !window.Summit.draft.findSubEnquiryByName) return null;
+    const cellText = genCellTextByIndex(r, subEnquiryColIndex);
+    if (!cellText) return null;
+    const subId = window.Summit.draft.findSubEnquiryByName(cellText);
+    if (!subId) return null;
+    const caseText = genCellText(r, CASE_TEXT_COL);
+    const tpl = window.Summit.draft.bestTemplateForSubEnquiry
+      ? window.Summit.draft.bestTemplateForSubEnquiry(subId, caseText)
+      : null;
+    if (!tpl) return null;
+    return {
+      templateHtml: tpl.templateHtml && tpl.templateHtml.trim() ? tpl.templateHtml : null,
+      templateText: tpl.template || ''
+    };
+  }
+
+  // Returns { openingText, middleHtml, middleText, closingText } for a
+  // row, or null if the row has nothing in D/E/F/H/J/K/L worth
+  // generating from. middleHtml/middleText are both null when no
+  // Sub-Enquiry template was matched — the letter then reads exactly
+  // as it always did (referral line/liner straight into the end-liner).
+  function buildTemplateForRow(r, subEnquiryColIndex) {
     const d = genCellText(r, 'D');
     const e = genCellText(r, 'E');
     const f = genCellText(r, 'F');
@@ -2405,21 +2494,80 @@
     const refLine = prisoner ? 'We refer to your letter request received on ' + hFormatted + '.' : 'We refer to your enquiry of ' + hFormatted + '.';
     const salutation = 'Dear ' + [j, k].filter(Boolean).join(' ');
 
-    const lines = [salutation, refLine];
-    if (liner) lines.push(liner);
-    lines.push(endLiner);
-    return lines.join('\n');
+    const openingLines = [salutation, refLine];
+    if (liner) openingLines.push(liner);
+
+    const matched = matchedTemplateForRow(r, subEnquiryColIndex);
+
+    return {
+      openingText: openingLines.join('\n\n'),
+      middleHtml: matched ? matched.templateHtml : null,
+      middleText: matched && !matched.templateHtml ? matched.templateText : null,
+      closingText: endLiner
+    };
   }
 
-  // Writes the letter into column N, hyperlinking the first occurrence of
-  // each marker in AUTO_LINK_RULES (Account settings / Contact Us /
-  // cpf.gov.sg), wherever in the letter it happens to fall.
-  function writeTemplateToCell(r, text) {
-    const td = cellsEl[r][GEN_COL.N];
-    td.textContent = '';
+  // Strips a template's stored HTML down to the same small whitelist
+  // it was already sanitized to in Draft (text/<br>/<a href>/<b>/<i>/
+  // <u>, arbitrarily nested) before it's spliced into a grid cell —
+  // defensive, since peaks.js and draft.js are separate modules and
+  // this shouldn't blindly trust whatever crosses that boundary.
+  // Returns a detached wrapper element whose childNodes are the clean
+  // content, ready to be moved into a <td>.
+  function sanitizeGeneratedTemplateHtml(html) {
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = html || '';
+    (function clean(node) {
+      Array.from(node.childNodes).forEach((child) => {
+        if (child.nodeType === Node.TEXT_NODE) return;
+        if (child.nodeType !== Node.ELEMENT_NODE) { child.remove(); return; }
+        let tag = child.tagName;
+        if (tag === 'BR') return;
+        if (tag === 'A') {
+          const href = (child.getAttribute('href') || '').trim();
+          Array.from(child.attributes).forEach((attr) => child.removeAttribute(attr.name));
+          if (href) {
+            child.setAttribute('href', href);
+            child.setAttribute('target', '_blank');
+            child.setAttribute('rel', 'noopener');
+            child.className = 'peaks-link';
+            clean(child);
+          } else {
+            while (child.firstChild) child.parentNode.insertBefore(child.firstChild, child);
+            child.remove();
+          }
+          return;
+        }
+        if (tag === 'STRONG' || tag === 'EM') {
+          const replacement = document.createElement(tag === 'STRONG' ? 'b' : 'i');
+          while (child.firstChild) replacement.appendChild(child.firstChild);
+          child.parentNode.replaceChild(replacement, child);
+          child = replacement;
+          tag = child.tagName;
+        }
+        if (tag === 'B' || tag === 'I' || tag === 'U') {
+          Array.from(child.attributes).forEach((attr) => child.removeAttribute(attr.name));
+          clean(child);
+          return;
+        }
+        // Anything else — unwrap, keep contents.
+        clean(child);
+        while (child.firstChild) child.parentNode.insertBefore(child.firstChild, child);
+        child.remove();
+      });
+    }(wrapper));
+    return wrapper;
+  }
 
+  // Appends `text` to `td` as text nodes, hyperlinking the first
+  // not-yet-linked occurrence of each AUTO_LINK_RULES marker —
+  // `linkedMarkers` is shared across both the opening and closing text
+  // of a letter so a marker used in the liner doesn't get linked a
+  // second time if it also happens to appear in the end-liner.
+  function appendLinkedText(td, text, linkedMarkers) {
     const hits = [];
     AUTO_LINK_RULES.forEach(({ marker, url }) => {
+      if (linkedMarkers.has(marker)) return;
       const idx = text.indexOf(marker);
       if (idx !== -1) hits.push({ idx, end: idx + marker.length, marker, url });
     });
@@ -2432,9 +2580,37 @@
       const a = makeLinkEl(hit.url);
       a.textContent = hit.marker;
       td.appendChild(a);
+      linkedMarkers.add(hit.marker);
       cursor = hit.end;
     });
     if (cursor < text.length) td.appendChild(document.createTextNode(text.slice(cursor)));
+  }
+
+  // Writes the letter into column N: opening (salutation + referral +
+  // liner), then — if a Sub-Enquiry template was matched — that
+  // template's full formatting (hyperlinks/bold/italic/underline)
+  // spliced in as real DOM nodes, then the end-liner. Auto-linking
+  // only ever touches the opening/closing text; a matched template
+  // already carries its own genuine links from Draft, untouched.
+  function writeTemplateToCell(r, parts) {
+    const td = cellsEl[r][GEN_COL.N];
+    td.textContent = '';
+    const linkedMarkers = new Set();
+
+    appendLinkedText(td, parts.openingText, linkedMarkers);
+
+    if (parts.middleHtml || parts.middleText) {
+      td.appendChild(document.createTextNode('\n\n'));
+      if (parts.middleHtml) {
+        const cleaned = sanitizeGeneratedTemplateHtml(parts.middleHtml);
+        while (cleaned.firstChild) td.appendChild(cleaned.firstChild);
+      } else {
+        td.appendChild(document.createTextNode(parts.middleText));
+      }
+    }
+
+    td.appendChild(document.createTextNode('\n\n'));
+    appendLinkedText(td, parts.closingText, linkedMarkers);
 
     td.classList.add('peaks-cell--wrap');
     if (rowHeights[r] <= DEFAULT_ROW_HEIGHT) {
@@ -2445,10 +2621,14 @@
   function generateTemplates() {
     const used = getUsedRange();
     if (used.rows === 0) { showToast('Nothing to generate \u2014 the sheet looks empty.'); return; }
+
+    let subEnquiryCol = findSubEnquiryColumn(used);
+    if (subEnquiryCol === null) subEnquiryCol = GEN_COL[SUBENQUIRY_FALLBACK_COL];
+
     const rowsToWrite = [];
     for (let r = 0; r < used.rows; r++) {
-      const text = buildTemplateForRow(r);
-      if (text !== null) rowsToWrite.push({ r, text });
+      const parts = buildTemplateForRow(r, subEnquiryCol);
+      if (parts !== null) rowsToWrite.push({ r, parts });
     }
     if (rowsToWrite.length === 0) {
       showToast('No rows with data in columns D\u2013L to generate from.');
@@ -2456,11 +2636,13 @@
     }
     const coords = rowsToWrite.map(({ r }) => ({ r, c: GEN_COL.N }));
     withHistory(coords, () => {
-      rowsToWrite.forEach(({ r, text }) => writeTemplateToCell(r, text));
+      rowsToWrite.forEach(({ r, parts }) => writeTemplateToCell(r, parts));
     });
     const n = rowsToWrite.length;
+    const matchedCount = rowsToWrite.filter(({ parts }) => parts.middleHtml || parts.middleText).length;
     if (generateStatusEl) {
-      const msg = 'Generated ' + n + ' template' + (n === 1 ? '' : 's') + ' into column N.';
+      const msg = 'Generated ' + n + ' template' + (n === 1 ? '' : 's') + ' into column N' +
+        (matchedCount ? ' \u2014 ' + matchedCount + ' with a matched Sub-Enquiry template inserted' : '') + '.';
       generateStatusEl.textContent = msg;
       generateStatusEl.title = msg;
     }
@@ -2678,26 +2860,58 @@
     '</style>';
 
   const CLIPBOARD_HEADING_RUN_STYLE = 'font-family:"Aptos Serif",serif;font-size:12.0pt;color:#0F4761;font-weight:normal;';
-  const CLIPBOARD_BODY_RUN_STYLE = 'font-family:"Aptos Serif",serif;font-size:10.0pt;color:black;font-weight:normal;font-style:normal;text-decoration:none;';
-  const CLIPBOARD_LINK_RUN_STYLE = 'font-family:"Aptos Serif",serif;font-size:10.0pt;color:#0F4761;font-weight:normal;font-style:normal;text-decoration:underline;';
 
-  // Same shape as cellInnerHTMLForClipboard (plain text -> escaped text,
-  // <a> -> a link), but every run carries its own direct inline style —
-  // CLIPBOARD_LINK_RUN_STYLE for hyperlinks, CLIPBOARD_BODY_RUN_STYLE for
-  // everything else — so Merge Formatting has real character formatting
-  // to preserve instead of just an inherited paragraph style.
+  // Base run style for cellInnerHTMLForWordExport below — bold/italic/
+  // underline/link state gets layered on top per run rather than baked
+  // into a single fixed string, since a generated letter's inserted
+  // template can carry any combination of them (e.g. a bold link).
+  function wordExportRunStyle(state) {
+    return 'font-family:"Aptos Serif",serif;font-size:10.0pt;'
+      + 'color:' + (state.link ? '#0F4761' : 'black') + ';'
+      + 'font-weight:' + (state.bold ? 'bold' : 'normal') + ';'
+      + 'font-style:' + (state.italic ? 'italic' : 'normal') + ';'
+      + 'text-decoration:' + ((state.underline || state.link) ? 'underline' : 'none') + ';';
+  }
+
+  function wordExportRunSpan(text, state) {
+    if (!text) return '';
+    return '<span style="' + wordExportRunStyle(state) + '">' + text + '</span>';
+  }
+
+  // Recurses through a cell's DOM (text, <br>, <a href>, and arbitrarily
+  // nested <b>/<strong>/<i>/<em>/<u>) carrying the accumulated
+  // bold/italic/underline/link state down to each leaf, so e.g. a bold
+  // word inside a hyperlink still renders bold in Word. Every leaf run
+  // gets its own inline-styled <span> (or <a> for links) — Word's
+  // "Merge Formatting" paste needs direct character styles here, not
+  // just semantic tags, to actually preserve the formatting.
+  function cellRunHtmlForWordExport(node, state) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return wordExportRunSpan(escapeHtml(node.textContent).replace(/\n/g, '<br>'), state);
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return wordExportRunSpan(escapeHtml(node.textContent || ''), state);
+    }
+    const tag = node.tagName;
+    if (tag === 'BR') return '<br>';
+    if (tag === 'A') {
+      const href = escapeHtml(node.getAttribute('href') || '');
+      const inner = Array.from(node.childNodes)
+        .map((c) => cellRunHtmlForWordExport(c, Object.assign({}, state, { link: true })))
+        .join('');
+      return '<a href="' + href + '">' + inner + '</a>';
+    }
+    let next = state;
+    if (tag === 'B' || tag === 'STRONG') next = Object.assign({}, state, { bold: true });
+    else if (tag === 'I' || tag === 'EM') next = Object.assign({}, state, { italic: true });
+    else if (tag === 'U') next = Object.assign({}, state, { underline: true });
+    return Array.from(node.childNodes).map((c) => cellRunHtmlForWordExport(c, next)).join('');
+  }
+
   function cellInnerHTMLForWordExport(td) {
+    const state = { bold: false, italic: false, underline: false, link: false };
     let html = '';
-    td.childNodes.forEach((node) => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        html += '<span style="' + CLIPBOARD_BODY_RUN_STYLE + '">' + escapeHtml(node.textContent).replace(/\n/g, '<br>') + '</span>';
-      } else if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'A') {
-        html += '<a href="' + escapeHtml(node.getAttribute('href') || '') + '" style="' + CLIPBOARD_LINK_RUN_STYLE + '">'
-          + escapeHtml(node.textContent) + '</a>';
-      } else {
-        html += '<span style="' + CLIPBOARD_BODY_RUN_STYLE + '">' + escapeHtml(node.textContent || '') + '</span>';
-      }
-    });
+    td.childNodes.forEach((node) => { html += cellRunHtmlForWordExport(node, state); });
     return html;
   }
 
