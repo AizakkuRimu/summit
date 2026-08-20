@@ -786,6 +786,57 @@
   color: var(--bronze-deep);
 }
 
+.draft-template-status.has-duplicate-warning {
+  color: var(--bronze-deep);
+  font-weight: 600;
+}
+
+/* Live "right off the bat" duplicate banner — appears the moment
+   pasted text looks like it already exists somewhere, well before
+   the paste is actually filed onto a Sub-Enquiry. */
+.draft-live-dup-banner {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bronze-soft);
+  color: var(--bronze-deep);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.draft-live-dup-banner[hidden] {
+  display: none;
+}
+
+.draft-smartqp__dup-badge {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bronze-soft);
+  color: var(--bronze-deep);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.draft-smartqp__dup-warning {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bronze-soft);
+  color: var(--bronze-deep);
+  font-size: 12.5px;
+}
+
+.draft-smartqp__dup-warning p {
+  margin: 0 0 4px;
+}
+
+.draft-smartqp__dup-warning ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
 .draft-col__actions--tight {
   margin-top: 6px;
   margin-bottom: 10px;
@@ -806,6 +857,32 @@
   border-radius: 8px;
   padding: 8px;
   background: var(--stone);
+  flex: none;
+}
+
+.draft-template-folder__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.draft-template-folder__header:hover {
+  color: var(--bronze-deep);
+}
+
+.draft-template-folder.is-open .draft-template-folder__header {
+  margin-bottom: 6px;
 }
 
 .draft-template-folder__label {
@@ -815,13 +892,29 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--bronze-deep);
-  margin: 0 0 6px;
+}
+
+.draft-template-folder__chevron {
+  flex: none;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--gray);
+  transition: transform 140ms ease;
+}
+
+.draft-template-folder.is-open .draft-template-folder__chevron {
+  transform: rotate(90deg);
+  color: var(--bronze-deep);
 }
 
 .draft-template-folder__chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.draft-template-folder:not(.is-open) .draft-template-folder__chips {
+  display: none;
 }
 
 .draft-template-tab {
