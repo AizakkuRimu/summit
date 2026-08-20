@@ -272,6 +272,15 @@ a.peaks-link {
   cursor: pointer;
 }
 
+/* Generate Template's "double-check before sending" flag — the
+   member's name, the referral date, and anything PII-shaped
+   (NRIC/FIN, long digit runs, dates, emails, mobile numbers) found in
+   an inserted Sub-Enquiry template. Purely visual; doesn't change the
+   text or how it copies out otherwise. */
+.peaks-pii-flag {
+  color: var(--flag-red, #C0392B);
+}
+
 td.peaks-cell--merge-master {
   box-shadow: inset 0 0 0 1px var(--gray-line);
 }
