@@ -917,6 +917,9 @@
     const tag = node.tagName;
     if (tag === 'BR') return '<br>';
     const inner = Array.from(node.childNodes).map(nodeToClipboardHtml).join('');
+    if (tag === 'SPAN' && node.classList.contains(PII_FLAG_CLASS)) {
+      return '<span class="' + PII_FLAG_CLASS + '" style="color:' + PII_FLAG_COLOR + '">' + inner + '</span>';
+    }
     switch (tag) {
       case 'A':
         return '<a href="' + escapeHtml(node.getAttribute('href') || '') + '">' + inner + '</a>';
@@ -985,16 +988,25 @@
         return;
       }
       if (tag === 'BR') { runs.push(Object.assign({ text: '\n', href: null }, fmt)); return; }
+      // A PII-flagged span carries its class where it survives (e.g. a
+      // Peaks -> Peaks round trip); the inline color is the fallback
+      // signal for a payload that dropped the class (some clipboard
+      // paths keep only inline styles).
+      const isPiiSpan = tag === 'SPAN' && (
+        n.classList.contains(PII_FLAG_CLASS) ||
+        (n.style && n.style.color && n.style.color.replace(/\s/g, '').toLowerCase() === PII_FLAG_COLOR_NORMALIZED.replace(/\s/g, '').toLowerCase())
+      );
       const nextFmt = {
         bold: fmt.bold || tag === 'B' || tag === 'STRONG',
         italic: fmt.italic || tag === 'I' || tag === 'EM',
-        underline: fmt.underline || tag === 'U'
+        underline: fmt.underline || tag === 'U',
+        pii: fmt.pii || isPiiSpan
       };
       const blockLevel = tag === 'DIV' || tag === 'P';
       n.childNodes.forEach((c) => walk(c, nextFmt));
       if (blockLevel && runs.length && runs[runs.length - 1].text !== '\n') runs.push(Object.assign({ text: '\n', href: null }, fmt));
     }
-    const baseFmt = { bold: false, italic: false, underline: false };
+    const baseFmt = { bold: false, italic: false, underline: false, pii: false };
     node.childNodes.forEach((n) => walk(n, baseFmt));
     while (runs.length && runs[runs.length - 1].text === '\n') runs.pop();
     return runs;
@@ -1026,6 +1038,7 @@
       if (run.underline) { const u = document.createElement('u'); u.appendChild(node); node = u; }
       if (run.italic) { const i = document.createElement('i'); i.appendChild(node); node = i; }
       if (run.bold) { const b = document.createElement('b'); b.appendChild(node); node = b; }
+      if (run.pii) { const span = document.createElement('span'); span.className = PII_FLAG_CLASS; span.appendChild(node); node = span; }
       if (run.href) {
         const a = makeLinkEl(run.href);
         a.appendChild(node);
@@ -2413,6 +2426,107 @@
     return d + ' ' + LONG_MONTH_NAMES[mo - 1] + ' ' + y;
   }
 
+  // ---------- PII / variable-content flagging ----------
+  // Colours text an officer should double-check before sending — not a
+  // redaction, purely visual. Covers: NRIC/FIN numbers, any 6+ digit
+  // run (reference/account/ID numbers), dates (numeric, or spelled out
+  // fully or as just month+year), bare 4-digit years, email addresses,
+  // and Singapore mobile numbers. Deliberately does NOT try to detect
+  // names or company names in free text — there's no reliable way to
+  // do that without real NLP, and a rough heuristic would both miss
+  // real names and wrongly flag ordinary capitalised words. The
+  // member's own name and the referral date ARE flagged, but only
+  // because buildTemplateForRow/writeTemplateToCell know exactly where
+  // those two pieces are — see makePiiSpan below — not via detection.
+  const PII_FLAG_CLASS = 'peaks-pii-flag';
+  const PII_FLAG_COLOR = '#C0392B';
+  // style.color always reads back browser-normalized (e.g. "rgb(192,
+  // 57, 43)"), never as the hex string it was set with — precompute
+  // that normalized form once so the inline-style fallback check in
+  // cellRunsFromNode compares like with like.
+  const PII_FLAG_COLOR_NORMALIZED = (function () {
+    const probe = document.createElement('span');
+    probe.style.color = PII_FLAG_COLOR;
+    return probe.style.color;
+  }());
+  const PII_MONTH_ALT = LONG_MONTH_NAMES.join('|');
+  const PII_PATTERNS = [
+    // Singapore NRIC/FIN: letter + 7 digits + letter.
+    new RegExp('\\b[STFGMstfgm]\\d{7}[A-Za-z]\\b', 'g'),
+    // Full spelled-out date: "16 June 2026".
+    new RegExp('\\b\\d{1,2}\\s+(?:' + PII_MONTH_ALT + ')\\s+\\d{4}\\b', 'gi'),
+    // Month + year only, no day: "June 2026".
+    new RegExp('\\b(?:' + PII_MONTH_ALT + ')\\s+\\d{4}\\b', 'gi'),
+    // Numeric date: 16/6/2026, 16-06-26, 16.6.2026.
+    /\b\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}\b/g,
+    // Bare 4-digit year (19xx/20xx) not already part of a match above.
+    /\b(?:19|20)\d{2}\b/g,
+    // Email address.
+    /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g,
+    // Singapore mobile number, optionally with a +65 prefix.
+    /(?:\+65[\s-]?)?\b[689]\d{7}\b/g,
+    // Any other run of 6+ digits — reference/account/ID numbers.
+    /\b\d{6,}\b/g
+  ];
+
+  // Runs every pattern above against `text` and keeps only the
+  // longest, earliest-starting, non-overlapping matches, so e.g. "16
+  // June 2026" is flagged once as a whole date rather than a second
+  // time for its bare year via the last pattern.
+  function findPiiRanges(text) {
+    const all = [];
+    PII_PATTERNS.forEach((re) => {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(text))) {
+        if (m[0].length) all.push({ start: m.index, end: m.index + m[0].length });
+        else re.lastIndex++; // guard against a zero-width match looping forever
+      }
+    });
+    all.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
+    const kept = [];
+    let cursor = 0;
+    all.forEach((range) => {
+      if (range.start < cursor) return; // overlaps a longer/earlier match already kept
+      kept.push(range);
+      cursor = range.end;
+    });
+    return kept;
+  }
+
+  function makePiiSpan(text) {
+    const span = document.createElement('span');
+    span.className = PII_FLAG_CLASS;
+    span.textContent = text;
+    return span;
+  }
+
+  // Walks every text node under `root` and wraps any PII-pattern match
+  // in a flagged <span>, in place. Used on the inserted Sub-Enquiry
+  // template content, after it's already been sanitized/cleaned —
+  // never on the fixed boilerplate lines, which never contain real
+  // case-specific detail to flag.
+  function flagPiiInTree(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    let n;
+    while ((n = walker.nextNode())) textNodes.push(n);
+    textNodes.forEach((textNode) => {
+      const text = textNode.textContent;
+      const ranges = findPiiRanges(text);
+      if (!ranges.length) return;
+      const frag = document.createDocumentFragment();
+      let cursor = 0;
+      ranges.forEach((range) => {
+        if (range.start > cursor) frag.appendChild(document.createTextNode(text.slice(cursor, range.start)));
+        frag.appendChild(makePiiSpan(text.slice(range.start, range.end)));
+        cursor = range.end;
+      });
+      if (cursor < text.length) frag.appendChild(document.createTextNode(text.slice(cursor)));
+      textNode.parentNode.replaceChild(frag, textNode);
+    });
+  }
+
   // "Non-Prisoner" contains the substring "Prisoner" too, so this only
   // counts a bare "Prisoner" mention, not a "Non-Prisoner" one.
   function isPrisonerFlag(lText) {
@@ -2456,11 +2570,15 @@
     };
   }
 
-  // Returns { openingText, middleHtml, middleText, closingText } for a
-  // row, or null if the row has nothing in D/E/F/H/J/K/L worth
-  // generating from. middleHtml/middleText are both null when no
-  // Sub-Enquiry template was matched — the letter then reads exactly
-  // as it always did (referral line/liner straight into the end-liner).
+  // Returns { salutationName, refLinePrefix, refDate, liner, middleHtml,
+  // middleText, closingText } for a row, or null if the row has nothing
+  // in D/E/F/H/J/K/L worth generating from. salutationName/refLinePrefix/
+  // refDate are kept separate (rather than pre-joined into one string)
+  // so writeTemplateToCell can flag the name and date red without any
+  // text-scanning — their positions are exactly known, not detected.
+  // middleHtml/middleText are both null when no Sub-Enquiry template was
+  // matched — the letter then reads exactly as it always did (referral
+  // line/liner straight into the end-liner).
   function buildTemplateForRow(r, subEnquiryColIndex) {
     const d = genCellText(r, 'D');
     const e = genCellText(r, 'E');
@@ -2491,16 +2609,16 @@
       : ENDLINER_HARDCOPY_NONPRISONER;
 
     const hFormatted = formatLongDate(h);
-    const refLine = prisoner ? 'We refer to your letter request received on ' + hFormatted + '.' : 'We refer to your enquiry of ' + hFormatted + '.';
-    const salutation = 'Dear ' + [j, k].filter(Boolean).join(' ');
-
-    const openingLines = [salutation, refLine];
-    if (liner) openingLines.push(liner);
+    const refLinePrefix = prisoner ? 'We refer to your letter request received on ' : 'We refer to your enquiry of ';
+    const salutationName = [j, k].filter(Boolean).join(' ');
 
     const matched = matchedTemplateForRow(r, subEnquiryColIndex);
 
     return {
-      openingText: openingLines.join('\n\n'),
+      salutationName,
+      refLinePrefix,
+      refDate: hFormatted,
+      liner,
       middleHtml: matched ? matched.templateHtml : null,
       middleText: matched && !matched.templateHtml ? matched.templateText : null,
       closingText: endLiner
@@ -2592,20 +2710,42 @@
   // spliced in as real DOM nodes, then the end-liner. Auto-linking
   // only ever touches the opening/closing text; a matched template
   // already carries its own genuine links from Draft, untouched.
+  //
+  // Two pieces get flagged red for a double-check regardless of what
+  // they contain (makePiiSpan): the salutation name and the referral
+  // date — these are known-exact positions, not detected. Everything
+  // pulled from a matched template additionally gets scanned for
+  // PII-shaped content (flagPiiInTree) since that's free text where
+  // case-specific detail can appear anywhere.
   function writeTemplateToCell(r, parts) {
     const td = cellsEl[r][GEN_COL.N];
     td.textContent = '';
     const linkedMarkers = new Set();
 
-    appendLinkedText(td, parts.openingText, linkedMarkers);
+    appendLinkedText(td, 'Dear ', linkedMarkers);
+    td.appendChild(makePiiSpan(parts.salutationName));
+    td.appendChild(document.createTextNode('\n\n'));
+
+    appendLinkedText(td, parts.refLinePrefix, linkedMarkers);
+    td.appendChild(makePiiSpan(parts.refDate));
+    appendLinkedText(td, '.', linkedMarkers);
+
+    if (parts.liner) {
+      td.appendChild(document.createTextNode('\n\n'));
+      appendLinkedText(td, parts.liner, linkedMarkers);
+    }
 
     if (parts.middleHtml || parts.middleText) {
       td.appendChild(document.createTextNode('\n\n'));
       if (parts.middleHtml) {
         const cleaned = sanitizeGeneratedTemplateHtml(parts.middleHtml);
+        flagPiiInTree(cleaned);
         while (cleaned.firstChild) td.appendChild(cleaned.firstChild);
       } else {
-        td.appendChild(document.createTextNode(parts.middleText));
+        const wrapper = document.createElement('span');
+        wrapper.textContent = parts.middleText;
+        flagPiiInTree(wrapper);
+        while (wrapper.firstChild) td.appendChild(wrapper.firstChild);
       }
     }
 
@@ -2867,7 +3007,7 @@
   // template can carry any combination of them (e.g. a bold link).
   function wordExportRunStyle(state) {
     return 'font-family:"Aptos Serif",serif;font-size:10.0pt;'
-      + 'color:' + (state.link ? '#0F4761' : 'black') + ';'
+      + 'color:' + (state.pii ? PII_FLAG_COLOR : (state.link ? '#0F4761' : 'black')) + ';'
       + 'font-weight:' + (state.bold ? 'bold' : 'normal') + ';'
       + 'font-style:' + (state.italic ? 'italic' : 'normal') + ';'
       + 'text-decoration:' + ((state.underline || state.link) ? 'underline' : 'none') + ';';
@@ -2879,12 +3019,12 @@
   }
 
   // Recurses through a cell's DOM (text, <br>, <a href>, and arbitrarily
-  // nested <b>/<strong>/<i>/<em>/<u>) carrying the accumulated
-  // bold/italic/underline/link state down to each leaf, so e.g. a bold
-  // word inside a hyperlink still renders bold in Word. Every leaf run
-  // gets its own inline-styled <span> (or <a> for links) — Word's
-  // "Merge Formatting" paste needs direct character styles here, not
-  // just semantic tags, to actually preserve the formatting.
+  // nested <b>/<strong>/<i>/<em>/<u>/PII-flag <span>) carrying the
+  // accumulated bold/italic/underline/link/pii state down to each leaf,
+  // so e.g. a bold word inside a hyperlink still renders bold in Word.
+  // Every leaf run gets its own inline-styled <span> (or <a> for links)
+  // — Word's "Merge Formatting" paste needs direct character styles
+  // here, not just semantic tags, to actually preserve the formatting.
   function cellRunHtmlForWordExport(node, state) {
     if (node.nodeType === Node.TEXT_NODE) {
       return wordExportRunSpan(escapeHtml(node.textContent).replace(/\n/g, '<br>'), state);
@@ -2905,11 +3045,12 @@
     if (tag === 'B' || tag === 'STRONG') next = Object.assign({}, state, { bold: true });
     else if (tag === 'I' || tag === 'EM') next = Object.assign({}, state, { italic: true });
     else if (tag === 'U') next = Object.assign({}, state, { underline: true });
+    else if (tag === 'SPAN' && node.classList.contains(PII_FLAG_CLASS)) next = Object.assign({}, state, { pii: true });
     return Array.from(node.childNodes).map((c) => cellRunHtmlForWordExport(c, next)).join('');
   }
 
   function cellInnerHTMLForWordExport(td) {
-    const state = { bold: false, italic: false, underline: false, link: false };
+    const state = { bold: false, italic: false, underline: false, link: false, pii: false };
     let html = '';
     td.childNodes.forEach((node) => { html += cellRunHtmlForWordExport(node, state); });
     return html;
