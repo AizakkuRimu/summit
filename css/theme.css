@@ -13,6 +13,7 @@
   --bronze:       #9C6B3E;  /* primary accent */
   --bronze-deep:  #6E4A2C;  /* accent hover / active */
   --bronze-soft:  #E8D9C4;  /* accent tint (selected states) */
+  --flag-red:     #C0392B;  /* Peaks "double-check before sending" text flag */
 }
 
 [data-theme="dark"] {
@@ -24,6 +25,7 @@
   --bronze:       #C99A6C;
   --bronze-deep:  #E8C39A;
   --bronze-soft:  #3E3226;
+  --flag-red:     #E5776A;
 }
 
 body {
