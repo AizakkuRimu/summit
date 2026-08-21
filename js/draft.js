@@ -14,7 +14,7 @@
 
    State lives at window.Summit.state.draft so switching tabs
    (Section 1) never loses it. Sections 6-8 (template finder,
-   reverse/deep search, import & export) will read this same
+   Smart Match/deep search, import & export) will read this same
    hierarchy rather than keeping their own copy.
 --------------------------------------------------------- */
 
@@ -37,6 +37,21 @@
   // template (see recordLabelUsage()) — used by the Quick Template
   // Adder to guess which two labels to pre-fill.
   state.recentLabels = state.recentLabels || [];
+
+  // ---------- Smart Match learning data (Section 7.1) ----------
+  // Deliberately kept separate from the Scheme/Category/Enquiry/
+  // Sub-Enquiry hierarchy above: this is "how confident should the
+  // matcher be" data, not document content, and has its own
+  // export/copy/import so it can be built up and shared independently
+  // of any one hierarchy export.
+  //   smartMatchTraining: append-only log, one entry per confirmed
+  //     match — { id, ts, status, keywords, confirmedSubId,
+  //               confirmedTemplateId, rejectedSubIds, source }
+  //   smartMatchWeights: "keyword|subEnquiryId" -> signed integer,
+  //     nudged up on every confirm and down on every reject for that
+  //     pairing; folded into ranking by computeSmartCandidates().
+  state.smartMatchTraining = state.smartMatchTraining || [];
+  state.smartMatchWeights = state.smartMatchWeights || {};
 
   const expandedIds = new Set(); // runtime-only tree expand/collapse state
 
@@ -167,18 +182,28 @@
   let findFullList = [];
   let findFullQuery = '';
 
-  // ---------- 7. Reverse Search & Deep Thinking Search DOM references ----------
-  const reverseInput = document.getElementById('draft-reverse-input');
-  const reverseBtn = document.getElementById('draft-reverse-btn');
-  const reverseClearBtn = document.getElementById('draft-reverse-clear-btn');
-  const reverseKeywordsEl = document.getElementById('draft-reverse-keywords');
-  const reverseKeywordsEmptyNote = document.getElementById('draft-reverse-keywords-empty');
-  const reverseResultsEl = document.getElementById('draft-reverse-results');
-  const reverseEmptyNote = document.getElementById('draft-reverse-empty');
-  const reverseCountEl = document.getElementById('draft-reverse-count');
-  let reverseKeywords = [];
-  let reverseHasSearched = false;
-  const expandedReverseIds = new Set();
+  // ---------- 7. Smart Match & Deep Thinking Search DOM references ----------
+  const smartInput = document.getElementById('draft-smart-input');
+  const smartStartBtn = document.getElementById('draft-smart-start-btn');
+  const smartClearBtn = document.getElementById('draft-smart-clear-btn');
+  const smartStatusBtns = Array.from(document.querySelectorAll('.draft-smart-status__btn'));
+  const smartBodyEl = document.getElementById('draft-smart-body');
+  let smartKeywords = [];
+  let smartStatus = null;
+  let smartCandidates = [];
+  let smartCursor = 0;
+  let smartCrossCount = 0;
+  let smartRejectedIds = new Set();
+  let smartPhase = 'idle'; // idle | matching | fallback | confirmed
+  let smartConfirmed = null;
+  const expandedSmartIds = new Set();
+  const SMART_GIVE_UP_AFTER = 10;
+  const SMART_WEIGHT_FACTOR = 0.03;
+  // Mirrors Section 12's NAME_HELPER_STATUSES — kept as its own local
+  // list (rather than a forward-reference to Section 12, which is
+  // defined later in this file) since it's only used here to parse a
+  // Sub-Enquiry name's leading status tag back out again.
+  const SMART_MATCH_STATUSES = ['SC', 'PR', 'Foreigner', 'Anonymous'];
 
   const deepQueryInput = document.getElementById('draft-deep-query');
   const deepRebuildBtn = document.getElementById('draft-deep-rebuild-btn');
@@ -5058,7 +5083,7 @@
 
 
   // ============================================================
-  // 7. Reverse Search & Deep Thinking Search
+  // 7. Smart Match & Deep Thinking Search
   // ============================================================
 
   // Jaccard-style overlap: how much two keyword lists share, scaled 0..1,
@@ -5073,7 +5098,7 @@
     return { score: matched.length / union, matched };
   }
 
-  function renderKeywordChips(container, emptyNote, keywords, { removable, highlightSet } = {}) {
+  function renderKeywordChips(container, emptyNote, keywords, { onRemove, highlightSet } = {}) {
     container.innerHTML = '';
     if (keywords.length === 0) {
       container.appendChild(emptyNote);
@@ -5086,32 +5111,24 @@
       const label = document.createElement('span');
       label.textContent = kw;
       chip.appendChild(label);
-      if (removable) {
+      if (onRemove) {
         const remove = document.createElement('button');
         remove.type = 'button';
         remove.className = 'draft-chip__remove';
         remove.setAttribute('aria-label', 'Remove keyword ' + kw);
         remove.textContent = '\u00D7';
-        remove.addEventListener('click', () => {
-          reverseKeywords = reverseKeywords.filter((k) => k !== kw);
-          renderReverseKeywords();
-          if (reverseHasSearched) renderReverseResults();
-        });
+        remove.addEventListener('click', () => onRemove(kw));
         chip.appendChild(remove);
       }
       container.appendChild(chip);
     });
   }
 
-  // ---------- 7.1 Reverse search ----------
-
-  function renderReverseKeywords() {
-    renderKeywordChips(reverseKeywordsEl, reverseKeywordsEmptyNote, reverseKeywords, { removable: true });
-  }
+  // ---------- 7.1 Smart Match ----------
 
   // Every keyword that could make a Sub-Enquiry match — its general
-  // pool plus every one of its templates' own filed keywords. Reverse
-  // search operates at the Sub-Enquiry level (one card per match, with
+  // pool plus every one of its templates' own filed keywords. Smart
+  // Match operates at the Sub-Enquiry level (one card per match, with
   // every template shown underneath), so unlike Template Finder it
   // needs the union rather than one template's effective set.
   function subAllKeywordsIncTemplates(sub) {
@@ -5122,14 +5139,62 @@
     return all;
   }
 
-  function computeReverseMatches() {
-    const matches = [];
+  // Pulls the leading "[SC/PR/Foreigner/Anonymous]" tag off a
+  // Sub-Enquiry name (the convention Section 12's Name Helper writes),
+  // e.g. "SC/PR - Refund : Timeline" -> ['SC', 'PR']. Returns null if
+  // the leading segment doesn't look like a pure status tag — that
+  // Sub-Enquiry just won't be narrowed by the status filter, rather
+  // than being hidden because of a naming slip.
+  function parseLeadingStatuses(name) {
+    const m = (name || '').match(/^\s*([A-Za-z\/]+)\s*-/);
+    if (!m) return null;
+    const tokens = m[1].split('/').map((s) => s.trim()).filter(Boolean);
+    const matched = tokens.filter((t) => SMART_MATCH_STATUSES.some((s) => s.toLowerCase() === t.toLowerCase()));
+    if (matched.length === 0 || matched.length !== tokens.length) return null;
+    return matched;
+  }
+
+  function subMatchesStatus(sub, status) {
+    if (!status) return true;
+    const statuses = parseLeadingStatuses(sub.name);
+    if (!statuses) return true;
+    return statuses.some((s) => s.toLowerCase() === status.toLowerCase());
+  }
+
+  // ---------- Learned keyword <-> Sub-Enquiry weights ----------
+  // "keyword|subId" -> signed integer. Nudged by recordSmartTraining()
+  // every time the tick/cross flow (or the manual fallback) confirms
+  // or rules out a candidate, so the ranking below quietly gets better
+  // at telling which Sub-Enquiry a given kind of enquiry belongs to.
+  function smartWeightKey(kw, subId) { return kw + '|' + subId; }
+
+  function getSmartWeight(kw, subId) {
+    return state.smartMatchWeights[smartWeightKey(kw, subId)] || 0;
+  }
+
+  function bumpSmartWeight(kw, subId, delta) {
+    const key = smartWeightKey(kw, subId);
+    const next = (state.smartMatchWeights[key] || 0) + delta;
+    if (next <= 0) delete state.smartMatchWeights[key];
+    else state.smartMatchWeights[key] = next;
+  }
+
+  // Ranked, status-filtered candidate list. Base score is the same
+  // Jaccard-style keyword overlap Smart Match's ranking uses; a small
+  // per-matched-keyword nudge from smartMatchWeights lets confirmed/
+  // rejected history reorder close calls without ever overriding a
+  // clearly stronger keyword match.
+  function computeSmartCandidates(keywords, status) {
+    const list = [];
     Object.values(state.subEnquiries).forEach((sub) => {
-      const { score, matched } = keywordOverlapScore(reverseKeywords, subAllKeywordsIncTemplates(sub));
-      if (score > 0) matches.push({ sub, score, matched });
+      if (!subMatchesStatus(sub, status)) return;
+      const { score, matched } = keywordOverlapScore(keywords, subAllKeywordsIncTemplates(sub));
+      const learned = matched.reduce((sum, kw) => sum + getSmartWeight(kw, sub.id), 0);
+      if (score === 0 && learned === 0) return;
+      list.push({ sub, score: score + learned * SMART_WEIGHT_FACTOR, matched });
     });
-    matches.sort((a, b) => b.score - a.score || pathForSubEnquiry(a.sub.id).localeCompare(pathForSubEnquiry(b.sub.id)));
-    return matches.slice(0, 15);
+    list.sort((a, b) => b.score - a.score || pathForSubEnquiry(a.sub.id).localeCompare(pathForSubEnquiry(b.sub.id)));
+    return list;
   }
 
   function renderMatchCard({ sub, score, matched }, expandedSet, onRefresh) {
@@ -5143,10 +5208,12 @@
     path.className = 'draft-result__path';
     path.textContent = pathForSubEnquiry(sub.id);
     header.appendChild(path);
-    const scoreBadge = document.createElement('span');
-    scoreBadge.className = 'draft-result__score';
-    scoreBadge.textContent = Math.round(score * 100) + '% match \u2022 ' + matched.length + ' keyword' + (matched.length === 1 ? '' : 's');
-    header.appendChild(scoreBadge);
+    if (score !== null) {
+      const scoreBadge = document.createElement('span');
+      scoreBadge.className = 'draft-result__score';
+      scoreBadge.textContent = Math.round(score * 100) + '% match \u2022 ' + matched.length + ' keyword' + (matched.length === 1 ? '' : 's');
+      header.appendChild(scoreBadge);
+    }
     card.appendChild(header);
 
     if (sub.keywords.length > 0) {
@@ -5242,50 +5309,355 @@
     return card;
   }
 
-  function renderReverseResults() {
-    const matches = computeReverseMatches();
-    reverseResultsEl.innerHTML = '';
-    reverseCountEl.textContent = !reverseHasSearched || matches.length === 0 ? '' :
-      (matches.length === 1 ? '1 match' : matches.length + ' matches');
-
-    if (!reverseHasSearched) {
-      reverseEmptyNote.textContent = 'Paste some text on the left and click "Find matching Sub-Enquiries" to see ranked matches.';
-      reverseResultsEl.appendChild(reverseEmptyNote);
-      return;
-    }
-    if (reverseKeywords.length === 0) {
-      reverseEmptyNote.textContent = 'No keywords left to match on — extract some text first.';
-      reverseResultsEl.appendChild(reverseEmptyNote);
-      return;
-    }
-    if (matches.length === 0) {
-      reverseEmptyNote.textContent = 'No Sub-Enquiry shares any of these keywords yet.';
-      reverseResultsEl.appendChild(reverseEmptyNote);
-      return;
-    }
-    matches.forEach((m) => reverseResultsEl.appendChild(renderMatchCard(m, expandedReverseIds, renderReverseResults)));
+  function smartResetSession() {
+    smartCandidates = [];
+    smartCursor = 0;
+    smartCrossCount = 0;
+    smartRejectedIds = new Set();
+    smartConfirmed = null;
+    expandedSmartIds.clear();
   }
 
-  reverseBtn.addEventListener('click', () => {
-    const text = reverseInput.value || '';
+  function currentSmartMatch() {
+    return smartCandidates[smartCursor] || null;
+  }
+
+  // Moves to the next unshown candidate, falling back to the manual
+  // finder once either the ranked list or the patience runs out —
+  // "whichever comes first" (Section 7.1 spec).
+  function advanceSmartCursor() {
+    smartCursor += 1;
+    if (smartCursor >= smartCandidates.length || smartCrossCount >= SMART_GIVE_UP_AFTER) {
+      smartPhase = 'fallback';
+    }
+  }
+
+  // Logs one confirmed match — from either the tick button or the
+  // manual fallback finder, both count the same way per Section 7.1 —
+  // into the exportable training log, and reinforces/decays the
+  // learned keyword weights so future rankings get sharper.
+  function recordSmartTraining({ confirmedSubId, source }) {
+    state.smartMatchTraining.push({
+      id: uid('train'),
+      ts: new Date().toISOString(),
+      status: smartStatus,
+      keywords: smartKeywords.slice(),
+      confirmedSubId,
+      rejectedSubIds: Array.from(smartRejectedIds),
+      source // 'tick' | 'fallback'
+    });
+    const confirmedSub = state.subEnquiries[confirmedSubId];
+    if (confirmedSub) {
+      const { matched } = keywordOverlapScore(smartKeywords, subAllKeywordsIncTemplates(confirmedSub));
+      matched.forEach((kw) => bumpSmartWeight(kw, confirmedSubId, 1));
+    }
+    smartRejectedIds.forEach((subId) => {
+      const rejectedSub = state.subEnquiries[subId];
+      if (!rejectedSub) return;
+      const { matched } = keywordOverlapScore(smartKeywords, subAllKeywordsIncTemplates(rejectedSub));
+      matched.forEach((kw) => bumpSmartWeight(kw, subId, -1));
+    });
+  }
+
+  function handleSmartYes() {
+    const match = currentSmartMatch();
+    if (!match) return;
+    smartConfirmed = match;
+    smartPhase = 'confirmed';
+    recordSmartTraining({ confirmedSubId: match.sub.id, source: 'tick' });
+    renderSmartBody();
+    showToast('Got it \u2014 Summit will remember this match.');
+  }
+
+  function handleSmartNo() {
+    const match = currentSmartMatch();
+    if (!match) return;
+    smartRejectedIds.add(match.sub.id);
+    smartCrossCount += 1;
+    advanceSmartCursor();
+    renderSmartBody();
+  }
+
+  function rawTemplateTextMatches(sub, ql) {
+    return subTemplates(sub).some((t) => (t.template || '').toLowerCase().includes(ql));
+  }
+
+  // The give-up fallback: searches templates' actual stored text (not
+  // their filed keywords) plus the Scheme/Category/Enquiry/Sub-Enquiry
+  // breadcrumb, so it still finds a Sub-Enquiry whose keywords are
+  // thin even when the tick/cross ranking couldn't. Picking a result
+  // here confirms it exactly like a tick does.
+  function renderSmartFallback() {
+    const wrap = document.createElement('div');
+    wrap.className = 'draft-smart-fallback';
+
+    const heading = document.createElement('h3');
+    heading.className = 'draft-col__subtitle';
+    heading.textContent = smartCandidates.length ? 'Still not finding it?' : 'No automatic matches \u2014 search manually';
+    wrap.appendChild(heading);
+
+    const help = document.createElement('p');
+    help.className = 'draft-search-help';
+    help.textContent = 'Searches templates\u2019 actual text (not just their filed keywords), plus Scheme / Category / Enquiry / Sub-Enquiry names.';
+    wrap.appendChild(help);
+
+    const row = document.createElement('div');
+    row.className = 'draft-smart-fallback__row';
+    const input = document.createElement('input');
+    input.type = 'search';
+    input.className = 'draft-search-input';
+    input.placeholder = 'Search template text or hierarchy names\u2026';
+    input.setAttribute('aria-label', 'Manually search for a Sub-Enquiry');
+    row.appendChild(input);
+    wrap.appendChild(row);
+
+    const resultsEl = document.createElement('div');
+    resultsEl.className = 'draft-find-results';
+    wrap.appendChild(resultsEl);
+
+    function runFallbackSearch() {
+      const q = input.value.trim();
+      resultsEl.innerHTML = '';
+      if (!q) {
+        const note = document.createElement('p');
+        note.className = 'draft-empty-note';
+        note.textContent = 'Type at least a couple of characters to search.';
+        resultsEl.appendChild(note);
+        return;
+      }
+      const ql = q.toLowerCase();
+      const matches = Object.values(state.subEnquiries).filter((sub) =>
+        subMatchesStatus(sub, smartStatus) &&
+        (pathForSubEnquiry(sub.id).toLowerCase().includes(ql) || rawTemplateTextMatches(sub, ql))
+      ).slice(0, 25);
+      if (matches.length === 0) {
+        const note = document.createElement('p');
+        note.className = 'draft-empty-note';
+        note.textContent = 'Nothing found for that.';
+        resultsEl.appendChild(note);
+        return;
+      }
+      matches.forEach((sub) => {
+        const card = renderMatchCard({ sub, score: null, matched: [] }, expandedSmartIds, runFallbackSearch);
+        const pick = document.createElement('button');
+        pick.type = 'button';
+        pick.className = 'summit-btn summit-btn--primary';
+        pick.textContent = 'Use this Sub-Enquiry';
+        pick.addEventListener('click', () => {
+          smartConfirmed = { sub, score: null, matched: [] };
+          smartPhase = 'confirmed';
+          recordSmartTraining({ confirmedSubId: sub.id, source: 'fallback' });
+          renderSmartBody();
+          showToast('Got it \u2014 Summit will remember this match.');
+        });
+        const cardActions = card.querySelector('.draft-result__actions');
+        cardActions.insertBefore(pick, cardActions.firstChild);
+        resultsEl.appendChild(card);
+      });
+    }
+
+    input.addEventListener('input', runFallbackSearch);
+    runFallbackSearch();
+    return wrap;
+  }
+
+  function smartTrainingPayload() {
+    return JSON.stringify({
+      exportedAt: new Date().toISOString(),
+      weights: state.smartMatchWeights,
+      training: state.smartMatchTraining
+    }, null, 2);
+  }
+
+  function exportSmartTraining() {
+    downloadTextBlob(new Blob([smartTrainingPayload()], { type: 'application/json' }),
+      'summit-smart-match-training-' + draftTimestamp() + '.json');
+  }
+
+  async function copySmartTraining() {
+    try {
+      await navigator.clipboard.writeText(smartTrainingPayload());
+      showToast('Training data copied to clipboard.');
+    } catch (err) {
+      showToast('Could not copy \u2014 try exporting instead.');
+    }
+  }
+
+  function importSmartTraining(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch (err) {
+        showToast('Could not read that file \u2014 is it a Smart Match training export?');
+        return;
+      }
+      const incomingWeights = parsed.weights || {};
+      Object.keys(incomingWeights).forEach((key) => {
+        state.smartMatchWeights[key] = (state.smartMatchWeights[key] || 0) + incomingWeights[key];
+      });
+      const incomingTraining = Array.isArray(parsed.training) ? parsed.training : [];
+      state.smartMatchTraining = state.smartMatchTraining.concat(incomingTraining);
+      renderSmartBody();
+      showToast('Imported ' + incomingTraining.length + ' training record' + (incomingTraining.length === 1 ? '' : 's') + '.');
+    };
+    reader.readAsText(file);
+  }
+
+  function buildSmartMemoryFooter() {
+    const wrap = document.createElement('div');
+    wrap.className = 'draft-smart-memory';
+
+    const heading = document.createElement('h3');
+    heading.className = 'draft-col__subtitle';
+    heading.textContent = 'Match memory';
+    wrap.appendChild(heading);
+
+    const count = state.smartMatchTraining.length;
+    const note = document.createElement('p');
+    note.className = 'draft-search-help';
+    note.textContent = count === 0
+      ? 'No confirmed matches recorded yet \u2014 kept separate from your template exports.'
+      : count + ' confirmed match' + (count === 1 ? '' : 'es') + ' recorded so far, kept separate from your template exports.';
+    wrap.appendChild(note);
+
+    const actions = document.createElement('div');
+    actions.className = 'draft-smart-train-actions';
+
+    const exportBtn = document.createElement('button');
+    exportBtn.type = 'button';
+    exportBtn.className = 'summit-btn';
+    exportBtn.textContent = 'Export training data (.json)';
+    exportBtn.disabled = count === 0;
+    exportBtn.addEventListener('click', exportSmartTraining);
+    actions.appendChild(exportBtn);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'summit-btn';
+    copyBtn.textContent = 'Copy training data';
+    copyBtn.disabled = count === 0;
+    copyBtn.addEventListener('click', copySmartTraining);
+    actions.appendChild(copyBtn);
+
+    const importLabel = document.createElement('label');
+    importLabel.className = 'summit-btn draft-smart-import-label';
+    importLabel.textContent = 'Import training data\u2026';
+    const importInput = document.createElement('input');
+    importInput.type = 'file';
+    importInput.accept = 'application/json';
+    importInput.className = 'draft-smart-import-input';
+    importInput.addEventListener('change', () => {
+      const file = importInput.files && importInput.files[0];
+      if (file) importSmartTraining(file);
+      importInput.value = '';
+    });
+    importLabel.appendChild(importInput);
+    actions.appendChild(importLabel);
+
+    wrap.appendChild(actions);
+    return wrap;
+  }
+
+  function renderSmartBody() {
+    smartBodyEl.innerHTML = '';
+
+    if (smartPhase === 'idle') {
+      const note = document.createElement('p');
+      note.className = 'draft-empty-note';
+      note.textContent = 'Paste text above, pick who you\u2019re replying to, then click "Find matching Sub-Enquiries."';
+      smartBodyEl.appendChild(note);
+    } else if (smartPhase === 'matching') {
+      const match = currentSmartMatch();
+      const progress = document.createElement('p');
+      progress.className = 'draft-smart-progress';
+      progress.textContent = 'Checking ' + (smartCursor + 1) + ' of ' + smartCandidates.length +
+        ' possible match' + (smartCandidates.length === 1 ? '' : 'es') + ' \u2022 ' + smartCrossCount + ' ruled out so far';
+      smartBodyEl.appendChild(progress);
+
+      const actions = document.createElement('div');
+      actions.className = 'draft-smart-candidate__actions';
+      const yesBtn = document.createElement('button');
+      yesBtn.type = 'button';
+      yesBtn.className = 'summit-btn draft-smart-yes';
+      yesBtn.textContent = '\u2713 This is the match';
+      yesBtn.addEventListener('click', handleSmartYes);
+      const noBtn = document.createElement('button');
+      noBtn.type = 'button';
+      noBtn.className = 'summit-btn draft-smart-no';
+      noBtn.textContent = '\u2717 Not a match';
+      noBtn.addEventListener('click', handleSmartNo);
+      actions.appendChild(yesBtn);
+      actions.appendChild(noBtn);
+      smartBodyEl.appendChild(actions);
+
+      smartBodyEl.appendChild(renderMatchCard(match, expandedSmartIds, renderSmartBody));
+    } else if (smartPhase === 'confirmed' && smartConfirmed) {
+      const banner = document.createElement('p');
+      banner.className = 'draft-smart-progress draft-smart-progress--confirmed';
+      banner.textContent = '\u2713 Recorded \u2014 Summit will rank this higher next time similar text comes up.';
+      smartBodyEl.appendChild(banner);
+      smartBodyEl.appendChild(renderMatchCard(smartConfirmed, expandedSmartIds, renderSmartBody));
+
+      const again = document.createElement('button');
+      again.type = 'button';
+      again.className = 'summit-btn';
+      again.textContent = 'Start a new match';
+      again.addEventListener('click', () => {
+        smartInput.value = '';
+        smartResetSession();
+        smartPhase = 'idle';
+        renderSmartBody();
+      });
+      smartBodyEl.appendChild(again);
+    } else if (smartPhase === 'fallback') {
+      smartBodyEl.appendChild(renderSmartFallback());
+    }
+
+    smartBodyEl.appendChild(buildSmartMemoryFooter());
+  }
+
+  smartStatusBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      smartStatus = smartStatus === btn.dataset.status ? null : btn.dataset.status;
+      smartStatusBtns.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.status === smartStatus)));
+    });
+  });
+
+  smartStartBtn.addEventListener('click', () => {
+    const text = smartInput.value || '';
     if (!text.trim()) {
       showToast('Paste some text first.');
       return;
     }
-    reverseKeywords = extractKeywords(text);
-    reverseHasSearched = true;
-    renderReverseKeywords();
-    renderReverseResults();
-    if (reverseKeywords.length === 0) showToast('No meaningful keywords found in that text.');
+    if (!smartStatus) {
+      showToast('Pick who you\u2019re replying to first.');
+      return;
+    }
+    smartKeywords = extractKeywords(text);
+    smartResetSession();
+    if (smartKeywords.length === 0) {
+      showToast('No meaningful keywords found in that text \u2014 try the manual search below.');
+      smartPhase = 'fallback';
+      renderSmartBody();
+      return;
+    }
+    smartCandidates = computeSmartCandidates(smartKeywords, smartStatus);
+    smartPhase = smartCandidates.length ? 'matching' : 'fallback';
+    renderSmartBody();
   });
 
-  reverseClearBtn.addEventListener('click', () => {
-    reverseInput.value = '';
-    reverseKeywords = [];
-    reverseHasSearched = false;
-    renderReverseKeywords();
-    renderReverseResults();
+  smartClearBtn.addEventListener('click', () => {
+    smartInput.value = '';
+    smartStatus = null;
+    smartStatusBtns.forEach((b) => b.setAttribute('aria-pressed', 'false'));
+    smartResetSession();
+    smartPhase = 'idle';
+    renderSmartBody();
   });
+
+  renderSmartBody();
 
   // ---------- 7.2 Deep thinking search ----------
 
@@ -5557,7 +5929,7 @@
     refreshFindFilters();
     renderFindResults();
     buildDeepIndex();
-    if (reverseHasSearched) renderReverseResults();
+    if (smartPhase !== 'idle') renderSmartBody();
     if (subpanels.importexport && !subpanels.importexport.hidden) { renderExportFilterList(); renderBatchList(); }
     syncFileSelectsToTreeSelection();
   }
@@ -6838,7 +7210,7 @@
 
     // Given free text, returns the best-matching Sub-Enquiries ranked by
     // keyword overlap with each Sub-Enquiry's own tagged keywords — the
-    // same Jaccard-style scoring Section 7's reverse search uses.
+    // same Jaccard-style scoring Section 7's Smart Match uses.
     matchSubEnquiries(text, limit) {
       const cap = limit || 3;
       const queryKeywords = extractKeywords(text || '');
