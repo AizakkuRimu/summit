@@ -132,7 +132,7 @@
       if (tab.dataset.subtab) tab.setAttribute('aria-selected', String(tab.dataset.subtab === name));
     });
     Object.keys(subpanels).forEach((key) => { subpanels[key].hidden = key !== name; });
-    if (name === 'importexport') renderBatchList();
+    if (name === 'importexport') { renderExportFilterList(); renderBatchList(); }
   }
 
   subtabs.forEach((tab) => {
@@ -2107,6 +2107,10 @@
           '<button type="button" class="summit-modal__close" data-quicktpl-close aria-label="Close">\u2715</button>' +
         '</div>' +
         '<p class="draft-name-helper__hint" id="draft-quicktpl-target"></p>' +
+        '<label class="draft-field-label" for="draft-quicktpl-pinned-input">Pinned Name/Term for Quick Paste <span>(overrides the usual recent/most-picked guess until unpinned \u2014 max 2, clears when the browser closes)</span></label>' +
+        '<div class="draft-tag-input" id="draft-quicktpl-pinned-tags">' +
+          '<input type="text" class="draft-tag-input__field" id="draft-quicktpl-pinned-input" list="draft-label-datalist" placeholder="Type a tag, press Enter\u2026" autocomplete="off">' +
+        '</div>' +
         '<p class="draft-search-help">Paste the two-column block copied straight from your table \u2014 the member\u2019s enquiry, then a tab, then the reply. If the tab gets lost in the paste, this falls back to splitting at the 2nd \u201cDear\u201d. Bold, italics, underline and hyperlinks in the reply are kept when pasting from a table or Word.</p>' +
         '<label class="draft-name-helper__check draft-quicktpl__ignoremid" for="draft-quicktpl-ignoremiddle">' +
           '<input type="checkbox" id="draft-quicktpl-ignoremiddle" />' +
@@ -2129,6 +2133,9 @@
     const statusEl = modal.querySelector('#draft-quicktpl-status');
     const liveDupEl = modal.querySelector('#draft-quicktpl-live-dup');
     const ignoreMiddleEl = modal.querySelector('#draft-quicktpl-ignoremiddle');
+    const pinnedTagsEl = modal.querySelector('#draft-quicktpl-pinned-tags');
+    const pinnedInputEl = modal.querySelector('#draft-quicktpl-pinned-input');
+    wirePinnedLabelsWidget(pinnedTagsEl, pinnedInputEl);
 
     // Sticks for the rest of the browser session (sessionStorage, not
     // localStorage) — stays on across re-opens of this modal and page
@@ -2757,6 +2764,10 @@
           '<button type="button" class="summit-modal__close" data-smartqp-close aria-label="Close">\u2715</button>' +
         '</div>' +
         '<p class="draft-search-help">Paste the same two-column block as Quick add from paste \u2014 no need to select a Sub-Enquiry first. This finds the best matches for you, or lets you create one.</p>' +
+        '<label class="draft-field-label" for="draft-smartqp-pinned-input">Pinned Name/Term for Quick Paste <span>(overrides the usual recent/most-picked guess until unpinned \u2014 max 2, clears when the browser closes)</span></label>' +
+        '<div class="draft-tag-input" id="draft-smartqp-pinned-tags">' +
+          '<input type="text" class="draft-tag-input__field" id="draft-smartqp-pinned-input" list="draft-label-datalist" placeholder="Type a tag, press Enter\u2026" autocomplete="off">' +
+        '</div>' +
         '<label class="draft-name-helper__check draft-quicktpl__ignoremid" for="draft-smartqp-ignoremiddle">' +
           '<input type="checkbox" id="draft-smartqp-ignoremiddle" />' +
           ' Ignore middle column' +
@@ -2789,6 +2800,9 @@
 
     const inputEl = modal.querySelector('#draft-smartqp-input');
     const ignoreMiddleEl = modal.querySelector('#draft-smartqp-ignoremiddle');
+    const pinnedTagsEl = modal.querySelector('#draft-smartqp-pinned-tags');
+    const pinnedInputEl = modal.querySelector('#draft-smartqp-pinned-input');
+    wirePinnedLabelsWidget(pinnedTagsEl, pinnedInputEl);
     const findBtn = modal.querySelector('#draft-smartqp-find-btn');
     const statusEl = modal.querySelector('#draft-smartqp-status');
     const liveDupEl = modal.querySelector('#draft-smartqp-live-dup');
@@ -3141,6 +3155,100 @@
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }
 
+  // ---------- Pinned Name/Terms (Quick Paste / Smart Quick Paste) ----------
+  // Lets the user override the usual recent/most-picked guess below
+  // with a fixed set of Name/Term tags — once pinned, Quick Paste and
+  // Smart Quick Paste always pre-fill with these instead, until
+  // unpinned. Lives in sessionStorage rather than `state` (nothing
+  // else in this app persists across a reload) using the exact same
+  // pattern as the "Ignore middle column" toggle above: sticks across
+  // re-opening either modal and across page reloads within this tab,
+  // and clears itself once the browser/tab is actually closed.
+  const PINNED_LABELS_KEY = 'draft-pinned-labels';
+  const MAX_PINNED_LABELS = 2;
+
+  function loadPinnedLabels() {
+    try {
+      const parsed = JSON.parse(sessionStorage.getItem(PINNED_LABELS_KEY) || '[]');
+      return Array.isArray(parsed) ? parsed.filter((l) => typeof l === 'string' && l) : [];
+    } catch (err) { return []; }
+  }
+  function savePinnedLabels() {
+    try { sessionStorage.setItem(PINNED_LABELS_KEY, JSON.stringify(pinnedLabels)); }
+    catch (err) { /* storage may be blocked — pin still works for this render */ }
+  }
+  let pinnedLabels = loadPinnedLabels();
+
+  // Every open modal's pinned-tags widget registers itself here so
+  // pinning/unpinning in one (e.g. Smart Quick Paste) is reflected
+  // immediately if the other happens to already be built too.
+  const pinnedLabelWidgets = []; // [{ tagsEl, inputEl }]
+
+  function renderPinnedLabelWidgets() {
+    pinnedLabelWidgets.forEach(({ tagsEl, inputEl }) => {
+      if (!tagsEl || !inputEl) return;
+      tagsEl.querySelectorAll('.draft-chip').forEach((el) => el.remove());
+      pinnedLabels.forEach((tag) => {
+        const chip = document.createElement('span');
+        chip.className = 'draft-chip';
+        const label = document.createElement('span');
+        label.textContent = tag;
+        chip.appendChild(label);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'draft-chip__remove';
+        remove.setAttribute('aria-label', 'Unpin ' + tag);
+        remove.textContent = '\u00D7';
+        remove.addEventListener('click', () => {
+          pinnedLabels = pinnedLabels.filter((t) => t !== tag);
+          savePinnedLabels();
+          renderPinnedLabelWidgets();
+        });
+        chip.appendChild(remove);
+        tagsEl.insertBefore(chip, inputEl);
+      });
+      inputEl.placeholder = pinnedLabels.length >= MAX_PINNED_LABELS
+        ? 'Max ' + MAX_PINNED_LABELS + ' pinned \u2014 unpin one first'
+        : 'Type a tag, press Enter\u2026';
+    });
+  }
+
+  function commitPinnedLabelInput(inputEl) {
+    const raw = (inputEl.value || '').trim();
+    inputEl.value = '';
+    if (!raw) return;
+    raw.split(',').map((t) => t.trim()).filter(Boolean).forEach((tag) => {
+      if (pinnedLabels.includes(tag)) return;
+      if (pinnedLabels.length >= MAX_PINNED_LABELS) {
+        showToast('Only ' + MAX_PINNED_LABELS + ' pinned Name/Terms at a time \u2014 unpin one first.');
+        return;
+      }
+      pinnedLabels = pinnedLabels.concat([tag]);
+    });
+    savePinnedLabels();
+    renderPinnedLabelWidgets();
+  }
+
+  // Wires one pinned-tags widget (a .draft-tag-input chip row plus its
+  // input) into the shared pinnedLabels state — called once per modal,
+  // right after that modal's DOM is first built.
+  function wirePinnedLabelsWidget(tagsEl, inputEl) {
+    if (!tagsEl || !inputEl) return;
+    pinnedLabelWidgets.push({ tagsEl, inputEl });
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        commitPinnedLabelInput(inputEl);
+      } else if (e.key === 'Backspace' && !inputEl.value && pinnedLabels.length) {
+        pinnedLabels = pinnedLabels.slice(0, -1);
+        savePinnedLabels();
+        renderPinnedLabelWidgets();
+      }
+    });
+    inputEl.addEventListener('blur', () => commitPinnedLabelInput(inputEl));
+    renderPinnedLabelWidgets();
+  }
+
   // Bumps each of the given labels to the front of state.recentLabels
   // (most-recent-first, deduped) — called whenever a template's
   // labels are actually saved. Powers the Quick Template Adder's
@@ -3156,10 +3264,13 @@
     if (state.recentLabels.length > 50) state.recentLabels.length = 50;
   }
 
-  // The two labels the Quick Template Adder should pre-fill: the most
-  // recently saved ones if there's any history, otherwise the two used
-  // on the most templates overall.
+  // The two labels the Quick Template Adder should pre-fill: whatever's
+  // pinned (see "Pinned Name/Terms" above) takes priority over
+  // everything else; failing that, the most recently saved ones if
+  // there's any history, otherwise the two used on the most templates
+  // overall.
   function recommendedLabels() {
+    if (pinnedLabels.length) return pinnedLabels.slice(0, MAX_PINNED_LABELS);
     const recent = (state.recentLabels || []).filter(Boolean);
     if (recent.length) return recent.slice(0, 2);
     const counts = {};
@@ -5447,7 +5558,7 @@
     renderFindResults();
     buildDeepIndex();
     if (reverseHasSearched) renderReverseResults();
-    if (subpanels.importexport && !subpanels.importexport.hidden) renderBatchList();
+    if (subpanels.importexport && !subpanels.importexport.hidden) { renderExportFilterList(); renderBatchList(); }
     syncFileSelectsToTreeSelection();
   }
 
@@ -5496,6 +5607,12 @@
   const exportDocxBtn = document.getElementById('draft-export-docx-btn');
   const exportCopyBtn = document.getElementById('draft-export-copy-btn');
   const exportStatusEl = document.getElementById('draft-export-status');
+
+  const exportFilterListEl = document.getElementById('draft-export-filter-list');
+  const exportFilterEmptyEl = document.getElementById('draft-export-filter-empty');
+  const exportFilterCountEl = document.getElementById('draft-export-filter-count');
+  const exportFilterAllBtn = document.getElementById('draft-export-filter-all');
+  const exportFilterNoneBtn = document.getElementById('draft-export-filter-none');
 
   const batchSizeSel = document.getElementById('draft-batch-size');
   const batchCustomInput = document.getElementById('draft-batch-custom');
@@ -5644,6 +5761,108 @@
     return entries.map(entryBlock).join('\n\n');
   }
 
+  // ---------- 8.0 — Folder filter (export by Name/Term tag combo) ----------
+  //
+  // Reuses the same "folder" concept the Tag view already groups
+  // templates by (see templateFolderKey / groupTemplatesByFolder,
+  // Section 3) but applied library-wide instead of per-Sub-Enquiry, so
+  // Export .txt/.docx, Copy to clipboard, and Batch export can all be
+  // narrowed to just the ticked folders instead of always shipping
+  // every template. Opt-out by design: any folder the filter hasn't
+  // seen before (a brand-new tag combo, or the very first render)
+  // starts ticked, so "export everything" stays the default and
+  // nothing silently drops out of an export just because it was
+  // tagged after the last visit to this panel. Selections persist in
+  // memory for the session — same lifetime as the rest of the app's
+  // state — until the user unticks something themselves.
+  const exportSelectedFolderKeys = new Set();
+  const exportKnownFolderKeys = new Set();
+
+  function libraryFolders() {
+    // { key, labels, count }[] across every template in the library,
+    // untagged first then alphabetical — same ordering as folders get
+    // inside a single Sub-Enquiry.
+    const entries = getTemplateEntries();
+    const grouped = groupTemplatesByFolder(entries.map((e) => e.tpl));
+    return grouped.map((f) => ({ key: templateFolderKey(f.labels), labels: f.labels, count: f.templates.length }));
+  }
+
+  function getFilteredTemplateEntries() {
+    return getTemplateEntries().filter((e) => exportSelectedFolderKeys.has(templateFolderKey(templateLabels(e.tpl))));
+  }
+
+  function renderExportFilterList() {
+    if (!exportFilterListEl) return;
+    const folders = libraryFolders();
+
+    // Any folder key we haven't seen before defaults to selected —
+    // covers first load and any newly-tagged combo since the panel
+    // was last open. Keys the user has already made a choice about
+    // (ticked or unticked) are left exactly as they are.
+    folders.forEach((f) => {
+      if (!exportKnownFolderKeys.has(f.key)) {
+        exportKnownFolderKeys.add(f.key);
+        exportSelectedFolderKeys.add(f.key);
+      }
+    });
+
+    exportFilterListEl.innerHTML = '';
+
+    if (folders.length === 0) {
+      exportFilterListEl.appendChild(exportFilterEmptyEl);
+      if (exportFilterCountEl) exportFilterCountEl.textContent = '';
+      return;
+    }
+
+    folders.forEach((folder, i) => {
+      const item = document.createElement('label');
+      item.className = 'draft-export-filter__item';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = exportSelectedFolderKeys.has(folder.key);
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) exportSelectedFolderKeys.add(folder.key);
+        else exportSelectedFolderKeys.delete(folder.key);
+        updateExportFilterCount();
+      });
+      item.appendChild(checkbox);
+
+      const text = document.createElement('span');
+      text.className = 'draft-export-filter__item-label';
+      text.textContent = 'Folder ' + (i + 1) + ' \u2014 ' +
+        (folder.labels.length ? folder.labels.map((l) => '#' + l).join(' ') : 'No tags');
+      item.appendChild(text);
+
+      const count = document.createElement('span');
+      count.className = 'draft-export-filter__item-count';
+      count.textContent = folder.count + (folder.count === 1 ? ' template' : ' templates');
+      item.appendChild(count);
+
+      exportFilterListEl.appendChild(item);
+    });
+
+    updateExportFilterCount();
+  }
+
+  function updateExportFilterCount() {
+    if (!exportFilterCountEl) return;
+    const total = getTemplateEntries().length;
+    const selected = getFilteredTemplateEntries().length;
+    exportFilterCountEl.textContent = selected === total ?
+      (total + (total === 1 ? ' template' : ' templates')) :
+      (selected + ' of ' + total + ' selected');
+  }
+
+  if (exportFilterAllBtn) exportFilterAllBtn.addEventListener('click', () => {
+    libraryFolders().forEach((f) => exportSelectedFolderKeys.add(f.key));
+    renderExportFilterList();
+  });
+  if (exportFilterNoneBtn) exportFilterNoneBtn.addEventListener('click', () => {
+    exportSelectedFolderKeys.clear();
+    renderExportFilterList();
+  });
+
   // ---------- 8.1 — File import into the paste box ----------
 
   if (importFileBtn && importFileInput) {
@@ -5676,9 +5895,13 @@
   // ---------- 8.2 — Export (single: .txt / .docx / copy) ----------
 
   function exportPrecheck() {
-    const entries = getTemplateEntries();
-    if (entries.length === 0) {
+    if (getTemplateEntries().length === 0) {
       showToast('No templates yet — attach one to a Sub-Enquiry in the Tag view.');
+      return null;
+    }
+    const entries = getFilteredTemplateEntries();
+    if (entries.length === 0) {
+      showToast('No folders selected — tick at least one in "Filter by folder" above.');
       return null;
     }
     return entries;
@@ -5808,9 +6031,15 @@
   if (batchGenerateBtn) batchGenerateBtn.addEventListener('click', () => {
     const size = currentBatchSize();
     if (!size) { showToast('Enter a valid number of templates per batch.'); return; }
-    const entries = getTemplateEntries();
-    if (entries.length === 0) {
+    if (getTemplateEntries().length === 0) {
       showToast('No templates yet \u2014 attach one to a Sub-Enquiry in the Tag view.');
+      currentBatches = [];
+      renderBatchList();
+      return;
+    }
+    const entries = getFilteredTemplateEntries();
+    if (entries.length === 0) {
+      showToast('No folders selected \u2014 tick at least one in "Filter by folder" above.');
       currentBatches = [];
       renderBatchList();
       return;
