@@ -1342,7 +1342,7 @@
   min-height: 100px;
 }
 
-/* ---------- 6/7. Find & Search (filter / reverse / deep thinking) ---------- */
+/* ---------- 6/7. Find & Search (filter / Smart Match / deep thinking) ---------- */
 
 .draft-search-help {
   font-size: 12.5px;
@@ -1701,4 +1701,115 @@
   font-weight: 400;
   letter-spacing: 0;
   opacity: 0.75;
+}
+
+/* ---------- Section 7.1: Smart Match ---------- */
+
+.draft-smart-status {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 6px 0 14px;
+}
+
+.draft-smart-status__btn {
+  height: 32px;
+  padding: 0 14px;
+}
+
+.draft-smart-status__btn[aria-pressed="true"] {
+  background: var(--bronze-soft);
+  color: var(--bronze-deep);
+  border-color: var(--bronze);
+}
+
+.draft-smart-progress {
+  font-size: 12px;
+  color: var(--gray);
+  margin: 14px 0 8px;
+}
+
+.draft-smart-progress--confirmed {
+  color: var(--bronze-deep);
+  font-weight: 600;
+}
+
+.draft-smart-candidate__actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.draft-smart-yes,
+.draft-smart-no {
+  flex: 1;
+  height: 36px;
+  font-weight: 600;
+  border-color: transparent;
+}
+
+.draft-smart-yes {
+  background: #6E9C5A;
+  color: #fff;
+}
+
+.draft-smart-yes:hover {
+  background: #5C8449;
+  color: #fff;
+}
+
+.draft-smart-no {
+  background: var(--flag-red);
+  color: #fff;
+}
+
+.draft-smart-no:hover {
+  background: #a5352a;
+  color: #fff;
+}
+
+.draft-smart-fallback {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--gray-line);
+}
+
+.draft-smart-fallback__row {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.draft-smart-fallback__row .draft-search-input {
+  flex: 1 1 auto;
+}
+
+.draft-smart-memory {
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--gray-line);
+}
+
+.draft-smart-train-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.draft-smart-import-label {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.draft-smart-import-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
