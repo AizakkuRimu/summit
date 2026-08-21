@@ -1127,6 +1127,78 @@
   color: var(--gray);
 }
 
+/* ---------- Section 8: Import & Export — folder filter ---------- */
+
+.draft-export-filter__actions {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 6px;
+}
+
+.draft-export-filter__linkbtn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--bronze);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.draft-export-filter__linkbtn:hover {
+  color: var(--bronze-deep);
+}
+
+.draft-export-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 14px;
+}
+
+.draft-export-filter__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  padding: 4px 2px;
+  cursor: pointer;
+}
+
+.draft-export-filter__item input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  accent-color: var(--bronze);
+  cursor: pointer;
+}
+
+.draft-export-filter__item-label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.draft-export-filter__item-count {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  color: var(--gray);
+  flex-shrink: 0;
+}
+
+.draft-export-filter .draft-empty-note {
+  margin: 4px 2px;
+}
+
 /* ---------- Section 8: Import & Export — batch controls ---------- */
 
 .draft-batch-controls {
