@@ -589,7 +589,7 @@
         </div>
         </div>
 
-        <!-- Section 6/7: Find & Search — filter, reverse search, deep thinking search -->
+        <!-- Section 6/7: Find & Search — filter, Smart Match, deep thinking search -->
         <div class="draft-subpanel" id="draft-subpanel-find" data-subpanel="find" role="tabpanel" aria-labelledby="draft-subtab-find" hidden>
 
           <div class="draft-find-layout draft-find-layout--triple">
@@ -631,31 +631,29 @@
               <button type="button" class="summit-btn draft-find-viewmore-btn" id="draft-find-viewmore-btn" hidden>View more</button>
             </div>
 
-            <!-- 7.1 Reverse search -->
+            <!-- 7.1 Smart Match -->
             <div class="draft-col draft-col--find-filters">
               <div class="draft-col__header">
-                <h2 class="draft-col__title">Reverse search</h2>
+                <h2 class="draft-col__title">Smart Match</h2>
               </div>
-              <p class="draft-search-help">Paste or type text — Summit extracts its keywords and finds the closest-matching Sub-Enquiry, linking straight to any template already attached there.</p>
+              <p class="draft-search-help">Paste text, pick who you're replying to, then tick or cross each suggestion until one fits. Summit remembers every confirmed match and gets sharper over time.</p>
 
-              <textarea id="draft-reverse-input" class="draft-textarea" placeholder="Paste or type text to match against your hierarchy…" aria-label="Text to reverse-search against the hierarchy"></textarea>
+              <textarea id="draft-smart-input" class="draft-textarea" placeholder="Paste or type text to match against your hierarchy…" aria-label="Text to match against the hierarchy"></textarea>
+
+              <p class="draft-field-label">Who is this member?</p>
+              <div class="draft-smart-status" id="draft-smart-status-group" role="group" aria-label="Member status">
+                <button type="button" class="summit-btn draft-smart-status__btn" data-status="SC" aria-pressed="false">SC</button>
+                <button type="button" class="summit-btn draft-smart-status__btn" data-status="PR" aria-pressed="false">PR</button>
+                <button type="button" class="summit-btn draft-smart-status__btn" data-status="Foreigner" aria-pressed="false">Foreigner</button>
+                <button type="button" class="summit-btn draft-smart-status__btn" data-status="Anonymous" aria-pressed="false">Anonymous</button>
+              </div>
+
               <div class="draft-col__actions">
-                <button type="button" class="summit-btn summit-btn--primary" id="draft-reverse-btn">Find matching Sub-Enquiries</button>
-                <button type="button" class="summit-btn" id="draft-reverse-clear-btn">Clear</button>
+                <button type="button" class="summit-btn summit-btn--primary" id="draft-smart-start-btn">Find matching Sub-Enquiries</button>
+                <button type="button" class="summit-btn" id="draft-smart-clear-btn">Clear</button>
               </div>
 
-              <h3 class="draft-col__subtitle" id="draft-reverse-keywords-title">Extracted keywords</h3>
-              <div class="draft-keywords" id="draft-reverse-keywords" aria-live="polite" aria-labelledby="draft-reverse-keywords-title">
-                <p class="draft-empty-note" id="draft-reverse-keywords-empty">Extracted keywords will appear here — click any keyword to remove it from the match.</p>
-              </div>
-
-              <div class="draft-col__subhead">
-                <h3 class="draft-col__subtitle">Closest Sub-Enquiries</h3>
-                <span class="draft-find-count" id="draft-reverse-count"></span>
-              </div>
-              <div class="draft-find-results" id="draft-reverse-results">
-                <p class="draft-empty-note" id="draft-reverse-empty">Paste some text above and click "Find matching Sub-Enquiries" to see ranked matches.</p>
-              </div>
+              <div id="draft-smart-body"></div>
             </div>
 
             <!-- 7.2 Deep thinking search -->
