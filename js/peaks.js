@@ -2581,7 +2581,7 @@
   // text-scanning — their positions are exactly known, not detected.
   // middleHtml/middleText are both null when no Sub-Enquiry template was
   // matched — the letter then reads exactly as it always did (referral
-  // line/liner straight into the end-liner).
+  // line straight into the liner/end-liner closing block).
   function buildTemplateForRow(r, subEnquiryColIndex) {
     const d = genCellText(r, 'D');
     const e = genCellText(r, 'E');
@@ -2707,12 +2707,13 @@
     if (cursor < text.length) td.appendChild(document.createTextNode(text.slice(cursor)));
   }
 
-  // Writes the letter into column N: opening (salutation + referral +
-  // liner), then — if a Sub-Enquiry template was matched — that
-  // template's full formatting (hyperlinks/bold/italic/underline)
-  // spliced in as real DOM nodes, then the end-liner. Auto-linking
-  // only ever touches the opening/closing text; a matched template
-  // already carries its own genuine links from Draft, untouched.
+  // Writes the letter into column N: opening (salutation + referral),
+  // then — if a Sub-Enquiry template was matched — that template's
+  // full formatting (hyperlinks/bold/italic/underline) spliced in as
+  // real DOM nodes, then the Additionally-liner and the end-liner
+  // together as the closing block. Auto-linking only ever touches the
+  // opening/liner/closing text; a matched template already carries its
+  // own genuine links from Draft, untouched.
   //
   // Two pieces get flagged red for a double-check regardless of what
   // they contain (makePiiSpan): the salutation name and the referral
@@ -2733,11 +2734,6 @@
     td.appendChild(makePiiSpan(parts.refDate));
     appendLinkedText(td, '.', linkedMarkers);
 
-    if (parts.liner) {
-      td.appendChild(document.createTextNode('\n\n'));
-      appendLinkedText(td, parts.liner, linkedMarkers);
-    }
-
     if (parts.middleHtml || parts.middleText) {
       td.appendChild(document.createTextNode('\n\n'));
       if (parts.middleHtml) {
@@ -2750,6 +2746,13 @@
         flagPiiInTree(wrapper);
         while (wrapper.firstChild) td.appendChild(wrapper.firstChild);
       }
+    }
+
+    // Additionally-liner now sits with the end-liner as one closing
+    // block, after the template, rather than above it.
+    if (parts.liner) {
+      td.appendChild(document.createTextNode('\n\n'));
+      appendLinkedText(td, parts.liner, linkedMarkers);
     }
 
     td.appendChild(document.createTextNode('\n\n'));

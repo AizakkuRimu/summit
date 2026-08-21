@@ -6867,10 +6867,11 @@
     // title, so this stays strict. Returns the id, or null if no
     // Sub-Enquiry has that exact name.
     findSubEnquiryByName(name) {
-      const target = (name || '').trim().toLowerCase();
+      const collapseWhitespace = (s) => s.replace(/[\s\u00a0]+/g, ' ').trim();
+      const target = collapseWhitespace((name || '').toLowerCase());
       if (!target) return null;
       const id = Object.keys(state.subEnquiries).find((sid) =>
-        (state.subEnquiries[sid].name || '').trim().toLowerCase() === target);
+        collapseWhitespace((state.subEnquiries[sid].name || '').toLowerCase()) === target);
       return id || null;
     },
 
@@ -6888,12 +6889,19 @@
     // order breaking any remaining tie, so a re-run is stable rather
     // than random.
     findSubEnquiryByNameContains(text) {
-      const target = (text || '').trim().toLowerCase();
+      // Collapses any run of whitespace — regular spaces, tabs, and
+      // (critically) the literal newline that survives when a cell
+      // pasted from Excel had an internal line break (Alt+Enter), plus
+      // stray non-breaking spaces from Excel/Word paste — down to a
+      // single space, on both sides, so a name filed on one line still
+      // matches a cell where the same words wrapped onto two.
+      const collapseWhitespace = (s) => s.replace(/[\s\u00a0]+/g, ' ').trim();
+      const target = collapseWhitespace((text || '').toLowerCase());
       if (!target) return null;
       let best = null;
       let bestLen = -1;
       Object.keys(state.subEnquiries).forEach((sid) => {
-        const name = (state.subEnquiries[sid].name || '').trim();
+        const name = collapseWhitespace(state.subEnquiries[sid].name || '');
         if (!name || name.length <= bestLen) return;
         const escaped = name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const re = new RegExp('(?:^|[^a-z0-9])' + escaped + '(?:$|[^a-z0-9])', 'i');
