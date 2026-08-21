@@ -2552,12 +2552,15 @@
   // which template — if any — should be inserted into this row's
   // letter. Returns { templateHtml, templateText } (both possibly
   // null) rather than throwing when Draft's API isn't available, so a
-  // generate run degrades to "no insertion" instead of failing.
+  // generate run degrades to "no insertion" instead of failing. Uses
+  // the permissive (name-appears-anywhere-in-the-cell) lookup, not an
+  // exact match — this column's cell is usually a short note that
+  // mentions the Sub-Enquiry, not just its name on its own.
   function matchedTemplateForRow(r, subEnquiryColIndex) {
-    if (!window.Summit || !window.Summit.draft || !window.Summit.draft.findSubEnquiryByName) return null;
+    if (!window.Summit || !window.Summit.draft || !window.Summit.draft.findSubEnquiryByNameContains) return null;
     const cellText = genCellTextByIndex(r, subEnquiryColIndex);
     if (!cellText) return null;
-    const subId = window.Summit.draft.findSubEnquiryByName(cellText);
+    const subId = window.Summit.draft.findSubEnquiryByNameContains(cellText);
     if (!subId) return null;
     const caseText = genCellText(r, CASE_TEXT_COL);
     const tpl = window.Summit.draft.bestTemplateForSubEnquiry

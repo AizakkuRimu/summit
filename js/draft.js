@@ -6861,16 +6861,45 @@
       return results.slice(0, cap);
     },
 
-    // Exact (case-insensitive, trimmed) Sub-Enquiry name lookup —
-    // Section 3's Peaks letter generation uses this to work out which
-    // Sub-Enquiry a matched cell's text refers to. Returns the id, or
-    // null if no Sub-Enquiry has that exact name.
+    // Exact (case-insensitive, trimmed) Sub-Enquiry name lookup — used
+    // to identify the header column itself (Section 3's
+    // findSubEnquiryColumn): a header cell should just be a clean
+    // title, so this stays strict. Returns the id, or null if no
+    // Sub-Enquiry has that exact name.
     findSubEnquiryByName(name) {
       const target = (name || '').trim().toLowerCase();
       if (!target) return null;
       const id = Object.keys(state.subEnquiries).find((sid) =>
         (state.subEnquiries[sid].name || '').trim().toLowerCase() === target);
       return id || null;
+    },
+
+    // Permissive counterpart: returns the id of whichever filed
+    // Sub-Enquiry's name appears anywhere inside `text`, rather than
+    // requiring text to equal the name exactly. Section 3's Peaks
+    // letter generation uses this per row, since that column's cell is
+    // usually a short note that mentions the Sub-Enquiry rather than
+    // being nothing but its name. Matching is whole-word (case-
+    // insensitive) so "Refund" doesn't also fire inside "Refunding" or
+    // "Non-Refundable". If more than one filed name shows up in the
+    // text, the longest (most specific) match wins — e.g. "General
+    // Refund" beats "Refund" when both are filed and the cell says
+    // "General Refund request" — with state.subEnquiries's own key
+    // order breaking any remaining tie, so a re-run is stable rather
+    // than random.
+    findSubEnquiryByNameContains(text) {
+      const target = (text || '').trim().toLowerCase();
+      if (!target) return null;
+      let best = null;
+      let bestLen = -1;
+      Object.keys(state.subEnquiries).forEach((sid) => {
+        const name = (state.subEnquiries[sid].name || '').trim();
+        if (!name || name.length <= bestLen) return;
+        const escaped = name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp('(?:^|[^a-z0-9])' + escaped + '(?:$|[^a-z0-9])', 'i');
+        if (re.test(target)) { best = sid; bestLen = name.length; }
+      });
+      return best;
     },
 
     // The best-matching template for a Sub-Enquiry, given some free
