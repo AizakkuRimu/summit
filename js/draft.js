@@ -6565,7 +6565,6 @@
   // ---------- Entry format ----------
   // PATH: Scheme > Category > Enquiry > Sub-Enquiry
   // KEYWORDS: kw1, kw2
-  // TEMPLATE_ID: tpl-xxxxx
   // TEMPLATE_KEYWORDS: kw3, kw4  (this one template's own keywords,
   //   separate from the Sub-Enquiry's general KEYWORDS: above)
   // LABEL: tag1, tag2
@@ -6588,18 +6587,23 @@
   // LINKS sits before TEMPLATE (not after) because TEMPLATE's own
   // regex reads everything to the end of the block, verbatim.
   //
-  // TEMPLATE_ID is the template's real internal id, carried through so
-  // re-importing an export (your own, or a colleague's built under the
-  // same PATH) matches the *same* template again even if it's been
-  // renamed — and, crucially, so two people's independently-created
-  // "Template 1" don't collide into one just because they share a
-  // display name. A block with no TEMPLATE_ID (an older export) falls
-  // back to matching by TEMPLATE_NAME, same as before this existed.
+  // No hidden template id. A template's identity on import is simply
+  // "which Sub-Enquiry, which Name/Term folder (LABEL), which
+  // TEMPLATE_NAME" — the same three things you'd use to find it by eye
+  // in the app. Two templates both called "Template 1" never collide
+  // as long as they sit in different LABEL folders (or different Sub-
+  // Enquiries); the folder itself is what tells them apart, so there's
+  // nothing extra to carry through and nothing that can silently break
+  // if an id gets mangled by an external editor. The tradeoff: renaming
+  // a template in the exported text and re-importing it is treated as
+  // a *new* template in that folder (there's no id to recognize "same
+  // template, new name") rather than a rename in place — rename inside
+  // the app itself if you want to keep a single template's history.
 
   // Each exported entry is now one { sub, tpl } pair — a Sub-Enquiry
   // with more than one template produces one PATH/TEMPLATE block per
-  // template, distinguished by an (optional, backward-compatible)
-  // TEMPLATE_NAME: line.
+  // template, distinguished by its LABEL folder plus an (optional,
+  // backward-compatible) TEMPLATE_NAME: line.
   function entryBlock({ sub, tpl }) {
     const enq = state.enquiries[sub.enquiryId];
     const cat = enq ? state.categories[enq.categoryId] : null;
@@ -6617,7 +6621,6 @@
     return 'PATH: ' + path + '\n' +
       'KEYWORDS: ' + sub.keywords.join(', ') + '\n' +
       'LABEL: ' + templateLabels(tpl).join(', ') + '\n' +
-      'TEMPLATE_ID: ' + tpl.id + '\n' +
       'TEMPLATE_NAME: ' + (tpl.name || '') + '\n' +
       'TEMPLATE_KEYWORDS: ' + (tpl.keywords || []).join(', ') + '\n' +
       linksBlock +
@@ -6978,7 +6981,6 @@
     const pathMatch = block.match(/^PATH:\s*(.+)$/m);
     const keywordsMatch = block.match(/^KEYWORDS:\s*(.*)$/m);
     const labelMatch = block.match(/^LABEL:\s*(.*)$/m);
-    const templateIdMatch = block.match(/^TEMPLATE_ID:\s*(.*)$/m);
     const templateNameMatch = block.match(/^TEMPLATE_NAME:\s*(.*)$/m);
     const templateKeywordsMatch = block.match(/^TEMPLATE_KEYWORDS:\s*(.*)$/m);
     const linksMatch = block.match(/^LINKS:\n([\s\S]*?)(?=^(?:FORMAT:|TEMPLATE:))/m);
@@ -7004,10 +7006,6 @@
     // means "no rich formatting known"; import falls back to plain
     // text same as before rich formatting existed.
     const templateHtml = formatMatch ? sanitizeHtmlString(formatMatch[1].trim()) : null;
-    // No TEMPLATE_ID: line means an older export written before ids
-    // were carried through — import falls back to TEMPLATE_NAME (and,
-    // failing that, "the sub's one template") to find a match.
-    const templateId = templateIdMatch ? templateIdMatch[1].trim() : null;
     // No TEMPLATE_NAME: line means an older, single-template export —
     // treated as "unnamed" so import can fall back to updating a Sub-
     // Enquiry's one existing template in place (see importEntryText).
@@ -7018,7 +7016,7 @@
     const templateKeywords = templateKeywordsMatch
       ? templateKeywordsMatch[1].split(',').map((k) => k.trim()).filter(Boolean)
       : null;
-    return { path: segments, keywords, labels, links, templateHtml, templateId, templateName, templateKeywords, template: templateMatch[1].replace(/\n$/, '') };
+    return { path: segments, keywords, labels, links, templateHtml, templateName, templateKeywords, template: templateMatch[1].replace(/\n$/, '') };
   }
 
   function importEntryText(text) {
@@ -7037,40 +7035,37 @@
       const sub = state.subEnquiries[subId];
       sub.keywords = entry.keywords;
 
-      // Match an existing template primarily by its carried-through id
-      // — the only identity that's safe to merge across two people's
-      // independently-built data, since a display name like
-      // "Template 1" is just an auto-incrementing label and two
-      // different templates (yours and a colleague's) can easily share
-      // one. An older export with no TEMPLATE_ID: line falls back to
-      // matching by name *within the same tag-combo folder* — so a
-      // same-named "Template 1" tagged differently is correctly
-      // treated as a different template, not merged. A nameless (older
-      // still, single-template) export instead updates the
-      // Sub-Enquiry's one existing template in place — same behaviour
-      // as before ids, tags or multiple templates existed. Anything
-      // else creates a new template slot rather than guessing which
-      // one to overwrite.
+      // Match an existing template purely by where it lives: this
+      // Sub-Enquiry, this Name/Term folder (LABEL), this TEMPLATE_NAME
+      // — no hidden id involved. The folder is what keeps two
+      // same-named templates ("Template 1" in two different LABEL
+      // folders) distinct; within one folder, a name is the identity.
+      // A block with no LABEL: line (older export, or hand-written)
+      // matches by name in *any* folder within the sub, for backward
+      // compatibility. A block with neither LABEL nor TEMPLATE_NAME
+      // falls back to "the sub's one template" (oldest, single-
+      // template export format, from before multiple templates or
+      // tagging existed).
       const templates = subTemplates(sub);
-      let tpl = entry.templateId ? templates.find((t) => t.id === entry.templateId) : null;
-      if (!tpl && !entry.templateId && entry.templateName) {
-        tpl = templates.find((t) => t.name === entry.templateName &&
-          (entry.labels === null || sameFolder(templateLabels(t), entry.labels)));
+      let tpl = null;
+      if (entry.templateName) {
+        tpl = entry.labels !== null
+          ? templatesInFolder(templates, entry.labels).find((t) => t.name === entry.templateName)
+          : templates.find((t) => t.name === entry.templateName);
+      } else if (entry.labels === null && templates.length === 1) {
+        tpl = templates[0];
       }
-      if (!tpl && !entry.templateId && !entry.templateName && templates.length === 1) tpl = templates[0];
       if (!tpl) {
-        // New template — numbered within whichever tag-combo folder
-        // it's arriving with (untagged if LABEL: wasn't specified).
+        // New template — lands in whichever Name/Term folder it's
+        // arriving with (untagged if LABEL: wasn't specified), numbered
+        // only if it didn't come with its own TEMPLATE_NAME. Since a
+        // match above already covers "same folder, same name", there's
+        // nothing left to collide with here — no dedupe suffix needed.
         const folderLabels = entry.labels !== null ? entry.labels : [];
         const folderSiblings = templatesInFolder(templates, folderLabels);
-        const name = uniqueTemplateName(folderSiblings, entry.templateName || ('Template ' + (folderSiblings.length + 1)));
-        // Keep the imported id (when there is one) rather than minting
-        // a fresh local one, so importing an updated version of the
-        // same file later still lands on this same template.
-        tpl = { id: entry.templateId || uid('tpl'), name, template: '', templateHtml: '', templateLinks: [], keywords: [], labels: [] };
+        const name = entry.templateName || ('Template ' + (folderSiblings.length + 1));
+        tpl = { id: uid('tpl'), name, template: '', templateHtml: '', templateLinks: [], keywords: [], labels: folderLabels.slice() };
         templates.push(tpl);
-      } else if (entry.templateName) {
-        tpl.name = entry.templateName;
       }
       tpl.template = entry.template;
       // A re-export of an older entry (no FORMAT: line) shouldn't wipe
@@ -7082,13 +7077,6 @@
       // TEMPLATE_KEYWORDS: line always sets this template's own
       // keywords (even to empty); no line at all keeps whatever it had.
       if (entry.templateKeywords !== null) tpl.keywords = entry.templateKeywords;
-      // LABEL: applies to this template specifically (see comment
-      // above entryBlock) — not specified leaves its tags untouched.
-      if (entry.labels !== null) tpl.labels = entry.labels;
-      // Its tags may have just moved it into a different folder —
-      // keep its name unique within that folder, only if it's now
-      // actually colliding with a sibling there.
-      resolveTemplateNameCollision(templates, tpl);
       if (existed) updated += 1; else created += 1;
     });
     refreshLabelDatalist();
