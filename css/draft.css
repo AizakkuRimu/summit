@@ -12,6 +12,23 @@
   flex-direction: column;
 }
 
+/* ---------- Unsaved-changes warning bar ---------- */
+
+.draft-save-warning {
+  flex: none;
+  padding: 8px 18px;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-align: center;
+  color: #fff;
+  background: var(--flag-red, #C0392B);
+}
+
+.draft-save-warning[hidden] {
+  display: none;
+}
+
 /* ---------- Sub-tab navigation (Tag / Find / Search / Import-Export) ---------- */
 
 .draft-subnav {
