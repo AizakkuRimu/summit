@@ -236,6 +236,7 @@
 
   const addSchemeBtn = document.getElementById('draft-add-scheme-btn');
   const quickAddBtn = document.getElementById('draft-quick-add-btn');
+  const faqImportBtn = document.getElementById('draft-faq-import-btn');
   const smartQuickPasteBtn = document.getElementById('draft-smart-quickpaste-btn');
   const treeEl = document.getElementById('draft-tree');
   const treeEmptyNote = document.getElementById('draft-tree-empty');
@@ -1392,6 +1393,353 @@
     fillFileTemplateSelect(val || null);
     updateFileButtonState();
   });
+
+  // ============================================================
+  // FAQ Import: pull Question/Answer pairs out of an FAQ page
+  // without needing to open it. Two very different inputs land in
+  // the same box, auto-detected:
+  //   - A bare URL: we try to fetch it ourselves first. This only
+  //     works when the target site allows cross-origin requests
+  //     (most don't — browsers block a web page from silently
+  //     reading another site's response unless that site opts in),
+  //     so it's a "try it, it might just work" shortcut rather than
+  //     something to depend on.
+  //   - Pasted content (the page's HTML source, or just its copied
+  //     visible text): parsed locally, no network involved. This is
+  //     the reliable path, and works everywhere the URL path can't.
+  // Extraction itself is layered, most trustworthy first:
+  //   1. schema.org FAQPage JSON-LD — many sites embed this
+  //      specifically for search engines, and it's already clean
+  //      Q/A data with no guessing involved.
+  //   2. <dt>/<dd> definition lists.
+  //   3. Headings ending in "?" followed by the text under them,
+  //      up to the next heading.
+  //   4. Plain-text heuristic — lines ending in "?" (or starting
+  //      "Q:"/"Question") treated as questions, everything after up
+  //      to the next question treated as the answer. Least reliable,
+  //      used only once the more structured passes find nothing.
+  // Results are checkboxed so the person can drop anything that
+  // isn't really a Q&A pair before sending the rest on to the normal
+  // Paste & extract box to file as usual.
+  // ============================================================
+
+  function stripHtmlToText(html) {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    return (div.textContent || div.innerText || '').replace(/\s+/g, ' ').trim();
+  }
+
+  // Plain .textContent squashes every block element together with no
+  // separator ("Question?Answer text" instead of "Question?\nAnswer
+  // text"), which breaks the line-based plain-text heuristic below.
+  // Walk the tree ourselves and insert a line break after each
+  // block-level element instead.
+  const FAQ_BLOCK_TAGS = new Set(['P', 'DIV', 'LI', 'TR', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'SECTION', 'ARTICLE', 'DD', 'DT', 'BLOCKQUOTE']);
+  function htmlNodeToLineText(root) {
+    if (!root) return '';
+    let out = '';
+    (function walk(node) {
+      if (node.nodeType === 3) { out += node.textContent; return; }
+      if (node.nodeType !== 1) return;
+      const tag = node.tagName;
+      if (tag === 'SCRIPT' || tag === 'STYLE') return;
+      if (tag === 'BR') { out += '\n'; return; }
+      node.childNodes.forEach(walk);
+      if (FAQ_BLOCK_TAGS.has(tag)) out += '\n';
+    })(root);
+    return out;
+  }
+
+  function extractFaqFromJsonLd(doc) {
+    const pairs = [];
+    function collect(node) {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { node.forEach(collect); return; }
+      const type = node['@type'];
+      const isFaq = type === 'FAQPage' || (Array.isArray(type) && type.indexOf('FAQPage') !== -1);
+      if (isFaq && Array.isArray(node.mainEntity)) {
+        node.mainEntity.forEach((q) => {
+          if (!q || q['@type'] !== 'Question') return;
+          const ans = q.acceptedAnswer;
+          const answerText = ans && (ans.text || ans.name);
+          if (q.name && answerText) {
+            pairs.push({ question: stripHtmlToText(q.name), answer: stripHtmlToText(answerText) });
+          }
+        });
+      }
+      if (Array.isArray(node['@graph'])) node['@graph'].forEach(collect);
+    }
+    doc.querySelectorAll('script[type="application/ld+json"]').forEach((script) => {
+      try { collect(JSON.parse(script.textContent)); } catch (e) { /* not valid JSON — skip */ }
+    });
+    return pairs;
+  }
+
+  function extractFaqFromDefinitionList(doc) {
+    const pairs = [];
+    doc.querySelectorAll('dt').forEach((dt) => {
+      const dd = dt.nextElementSibling;
+      if (dd && dd.tagName === 'DD') {
+        const q = dt.textContent.trim();
+        const a = dd.textContent.trim();
+        if (q && a) pairs.push({ question: q, answer: a });
+      }
+    });
+    return pairs;
+  }
+
+  function extractFaqFromHeadings(doc) {
+    const pairs = [];
+    doc.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach((h) => {
+      const q = h.textContent.replace(/\s+/g, ' ').trim();
+      if (!q || !/\?\s*$/.test(q)) return;
+      let answer = '';
+      let node = h.nextElementSibling;
+      while (node && !/^H[1-6]$/.test(node.tagName)) {
+        const text = node.textContent.replace(/\s+/g, ' ').trim();
+        if (text) answer += (answer ? ' ' : '') + text;
+        node = node.nextElementSibling;
+      }
+      if (answer) pairs.push({ question: q, answer });
+    });
+    return pairs;
+  }
+
+  function extractFaqFromPlainText(text) {
+    const lines = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const qMarker = /^(Q\s*[:.\)]\s*|Question\s*\d*\s*[:.\)]?\s*)/i;
+    const aMarker = /^(A\s*[:.\)]\s*|Answer\s*\d*\s*[:.\)]?\s*)/i;
+    const pairs = [];
+    let current = null;
+    lines.forEach((line) => {
+      const isQuestion = qMarker.test(line) || /\?$/.test(line);
+      if (isQuestion) {
+        if (current && current.answer) pairs.push(current);
+        current = { question: line.replace(qMarker, '').trim(), answer: '' };
+      } else if (current) {
+        const cleaned = line.replace(aMarker, '').trim();
+        current.answer = current.answer ? current.answer + ' ' + cleaned : cleaned;
+      }
+    });
+    if (current && current.answer) pairs.push(current);
+    return pairs;
+  }
+
+  function dedupeFaqPairs(pairs) {
+    const seen = new Set();
+    return pairs.filter((p) => {
+      const key = p.question.toLowerCase() + '|' + p.answer.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function extractFaqFromHtml(htmlString) {
+    let doc;
+    try {
+      doc = new DOMParser().parseFromString(htmlString, 'text/html');
+    } catch (e) {
+      return { pairs: [], method: null };
+    }
+    let pairs = extractFaqFromJsonLd(doc);
+    if (pairs.length) return { pairs: dedupeFaqPairs(pairs), method: 'FAQ data embedded in the page (most reliable)' };
+
+    pairs = extractFaqFromDefinitionList(doc);
+    if (pairs.length) return { pairs: dedupeFaqPairs(pairs), method: 'definition list markup' };
+
+    pairs = extractFaqFromHeadings(doc);
+    if (pairs.length) return { pairs: dedupeFaqPairs(pairs), method: 'headings ending in "?"' };
+
+    const bodyText = doc.body ? htmlNodeToLineText(doc.body) : htmlString;
+    pairs = extractFaqFromPlainText(bodyText);
+    return { pairs: dedupeFaqPairs(pairs), method: pairs.length ? 'plain-text guesswork (double-check these)' : null };
+  }
+
+  async function runFaqImport(rawInput) {
+    const input = (rawInput || '').trim();
+    if (!input) return { pairs: [], method: null, note: 'Paste a link, or the FAQ page\u2019s text/HTML, first.' };
+
+    const looksLikeUrl = /^https?:\/\/\S+$/i.test(input) && input.indexOf('\n') === -1;
+    if (looksLikeUrl) {
+      try {
+        const res = await fetch(input, { mode: 'cors' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const html = await res.text();
+        const result = extractFaqFromHtml(html);
+        if (!result.pairs.length) {
+          result.note = 'Fetched the page but couldn\u2019t find clear Q&A pairs on it. Try pasting the FAQ\u2019s text directly instead.';
+        }
+        return result;
+      } catch (err) {
+        return {
+          pairs: [], method: null,
+          note: 'Couldn\u2019t fetch that page directly \u2014 most sites block another web app from reading them this way. Open the link, select and copy the FAQ text (or the page source), and paste it in here instead.'
+        };
+      }
+    }
+
+    const looksLikeHtml = /<\s*(html|body|div|p|h[1-6]|dt|dd)[\s>]/i.test(input);
+    const result = looksLikeHtml ? extractFaqFromHtml(input) : { pairs: dedupeFaqPairs(extractFaqFromPlainText(input)), method: 'plain-text guesswork (double-check these)' };
+    if (!result.pairs.length) {
+      result.note = 'Couldn\u2019t find clear Q&A pairs in that. Plain text works best when each question is on its own line and ends in "?".';
+    }
+    return result;
+  }
+
+  let faqImportEl = null;
+  let faqImportSel = null;
+  let faqImportPairs = [];
+
+  function faqPairsToText(pairs) {
+    return pairs.map((p) => 'Q: ' + p.question + '\nA: ' + p.answer).join('\n\n');
+  }
+
+  function renderFaqImportResults() {
+    faqImportSel.results.innerHTML = '';
+    if (faqImportPairs.length === 0) {
+      faqImportSel.resultsEmpty.hidden = false;
+      faqImportSel.actions.hidden = true;
+      return;
+    }
+    faqImportSel.resultsEmpty.hidden = true;
+    faqImportSel.actions.hidden = false;
+    faqImportPairs.forEach((pair, i) => {
+      const row = document.createElement('label');
+      row.className = 'draft-faq-import__item';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = true;
+      checkbox.addEventListener('change', () => { pair._checked = checkbox.checked; });
+      pair._checked = true;
+      row.appendChild(checkbox);
+      const text = document.createElement('div');
+      text.className = 'draft-faq-import__item-text';
+      const q = document.createElement('div');
+      q.className = 'draft-faq-import__item-q';
+      q.textContent = pair.question;
+      const a = document.createElement('div');
+      a.className = 'draft-faq-import__item-a';
+      a.textContent = pair.answer;
+      text.appendChild(q); text.appendChild(a);
+      row.appendChild(text);
+      faqImportSel.results.appendChild(row);
+    });
+  }
+
+  function ensureFaqImportModal() {
+    if (faqImportEl) return faqImportEl;
+
+    const modal = document.createElement('div');
+    modal.className = 'summit-modal draft-faq-import';
+    modal.id = 'draft-faq-import-modal';
+    modal.hidden = true;
+    modal.setAttribute('aria-hidden', 'true');
+    modal.innerHTML =
+      '<div class="summit-modal__backdrop" data-faq-import-close></div>' +
+      '<div class="summit-modal__panel draft-faq-import__panel" role="dialog" aria-modal="true" aria-labelledby="draft-faq-import-title">' +
+        '<div class="summit-modal__header">' +
+          '<h2 class="summit-modal__title" id="draft-faq-import-title">Import FAQ</h2>' +
+          '<button type="button" class="summit-modal__close" data-faq-import-close aria-label="Close">\u2715</button>' +
+        '</div>' +
+        '<p class="draft-name-helper__hint">Paste a link to try fetching it directly, or paste the FAQ page\u2019s text (or HTML source) \u2014 either way, I\u2019ll pull out the questions and answers below.</p>' +
+        '<textarea class="draft-textarea draft-faq-import__input" id="draft-faq-import-input" placeholder="https://example.com/faq  \u2014 or \u2014  paste the FAQ text/HTML here\u2026" aria-label="FAQ link or content"></textarea>' +
+        '<div class="draft-col__actions">' +
+          '<button type="button" class="summit-btn summit-btn--primary" id="draft-faq-import-run-btn">Extract Q&amp;A</button>' +
+        '</div>' +
+        '<p class="draft-template-status" id="draft-faq-import-status" aria-live="polite"></p>' +
+        '<div class="draft-faq-import__results" id="draft-faq-import-results"></div>' +
+        '<p class="draft-empty-note" id="draft-faq-import-results-empty">Extracted questions and answers will appear here \u2014 untick any that aren\u2019t really Q&amp;A pairs before sending them on.</p>' +
+        '<div class="summit-modal__actions" id="draft-faq-import-actions" hidden>' +
+          '<button type="button" class="summit-btn" id="draft-faq-import-copy-btn">Copy checked</button>' +
+          '<button type="button" class="summit-btn summit-btn--primary" id="draft-faq-import-send-btn">Send checked to Paste &amp; Extract</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+
+    faqImportSel = {
+      input: modal.querySelector('#draft-faq-import-input'),
+      runBtn: modal.querySelector('#draft-faq-import-run-btn'),
+      status: modal.querySelector('#draft-faq-import-status'),
+      results: modal.querySelector('#draft-faq-import-results'),
+      resultsEmpty: modal.querySelector('#draft-faq-import-results-empty'),
+      actions: modal.querySelector('#draft-faq-import-actions'),
+      copyBtn: modal.querySelector('#draft-faq-import-copy-btn'),
+      sendBtn: modal.querySelector('#draft-faq-import-send-btn')
+    };
+
+    faqImportSel.runBtn.addEventListener('click', async () => {
+      faqImportSel.runBtn.disabled = true;
+      faqImportSel.status.textContent = 'Working\u2026';
+      faqImportPairs = [];
+      renderFaqImportResults();
+      try {
+        const result = await runFaqImport(faqImportSel.input.value);
+        faqImportPairs = result.pairs || [];
+        renderFaqImportResults();
+        if (faqImportPairs.length) {
+          faqImportSel.status.textContent = 'Found ' + faqImportPairs.length +
+            (faqImportPairs.length === 1 ? ' Q&A pair' : ' Q&A pairs') +
+            ' \u2014 via ' + result.method + '.';
+        } else {
+          faqImportSel.status.textContent = result.note || 'Couldn\u2019t find any Q&A pairs.';
+        }
+      } catch (err) {
+        faqImportSel.status.textContent = 'Something went wrong reading that \u2014 try pasting the FAQ text directly.';
+      } finally {
+        faqImportSel.runBtn.disabled = false;
+      }
+    });
+
+    faqImportSel.copyBtn.addEventListener('click', async () => {
+      const checked = faqImportPairs.filter((p) => p._checked);
+      if (!checked.length) { showToast('Nothing ticked to copy.'); return; }
+      try {
+        await navigator.clipboard.writeText(faqPairsToText(checked));
+        showToast('Copied ' + checked.length + (checked.length === 1 ? ' pair' : ' pairs') + ' to clipboard.');
+      } catch (err) {
+        showToast('Could not copy \u2014 clipboard unavailable.');
+      }
+    });
+
+    faqImportSel.sendBtn.addEventListener('click', () => {
+      const checked = faqImportPairs.filter((p) => p._checked);
+      if (!checked.length) { showToast('Nothing ticked to send.'); return; }
+      pasteInput.value = faqPairsToText(checked);
+      closeFaqImport();
+      showToast('Sent ' + checked.length + (checked.length === 1 ? ' pair' : ' pairs') + ' to Paste & extract.');
+      pasteInput.focus();
+    });
+
+    modal.querySelectorAll('[data-faq-import-close]').forEach((el) => {
+      el.addEventListener('click', closeFaqImport);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !modal.hidden) closeFaqImport();
+    });
+
+    faqImportEl = modal;
+    return modal;
+  }
+
+  function openFaqImport() {
+    const modal = ensureFaqImportModal();
+    faqImportPairs = [];
+    faqImportSel.input.value = '';
+    faqImportSel.status.textContent = '';
+    renderFaqImportResults();
+    modal.hidden = false;
+    modal.setAttribute('aria-hidden', 'false');
+    faqImportSel.input.focus();
+  }
+
+  function closeFaqImport() {
+    if (!faqImportEl) return;
+    faqImportEl.hidden = true;
+    faqImportEl.setAttribute('aria-hidden', 'true');
+  }
+
+  if (faqImportBtn) faqImportBtn.addEventListener('click', openFaqImport);
 
   // ============================================================
   // Quick Add: see the whole Scheme/Category/Enquiry/Sub-Enquiry
