@@ -53,6 +53,156 @@
   state.smartMatchTraining = state.smartMatchTraining || [];
   state.smartMatchWeights = state.smartMatchWeights || {};
 
+  // ---------- Unsaved-changes tracking & warning bar ----------
+  // Nothing in this app persists across a reload (see the Hierarchy
+  // "saved" indicator further down) — Export and Copy-to-clipboard are
+  // the only ways data actually leaves the tab. This section watches
+  // every write anywhere under the Hierarchy (Scheme/Category/Enquiry/
+  // Sub-Enquiry names & structure) and under Template Data (a
+  // Sub-Enquiry's own keywords, plus anything on its templates: text,
+  // keywords, labels, add/remove/reorder) and flips on a warning bar
+  // the moment either goes stale. The two halves are tracked and
+  // cleared independently, since exporting one doesn't save the other.
+  let hierarchyDirty = false;
+  let templateDataDirty = false;
+
+  function updateSaveWarningBar() {
+    if (!saveWarningEl) return;
+    const parts = [];
+    if (templateDataDirty) parts.push('Template Data');
+    if (hierarchyDirty) parts.push('Hierarchy');
+    if (parts.length === 0) {
+      saveWarningEl.hidden = true;
+      saveWarningEl.textContent = '';
+      return;
+    }
+    saveWarningEl.hidden = false;
+    saveWarningEl.textContent = parts.join(' and ') +
+      (parts.length === 1 ? ' has' : ' have') + ' not been saved yet.';
+  }
+
+  function markHierarchyDirty() {
+    if (hierarchyDirty) return;
+    hierarchyDirty = true;
+    updateSaveWarningBar();
+  }
+
+  function markTemplateDataDirty() {
+    if (templateDataDirty) return;
+    templateDataDirty = true;
+    updateSaveWarningBar();
+  }
+
+  function clearHierarchyDirty() {
+    if (!hierarchyDirty) return;
+    hierarchyDirty = false;
+    updateSaveWarningBar();
+  }
+
+  function clearTemplateDataDirty() {
+    if (!templateDataDirty) return;
+    templateDataDirty = false;
+    updateSaveWarningBar();
+  }
+
+  // Deep-watches a plain object/array tree and fires onChange on any
+  // property write or delete anywhere inside it. Wrapper proxies are
+  // cached per underlying object, so reading the same nested object
+  // twice (e.g. state.schemes[id] called from two places) returns the
+  // exact same proxy both times — reference equality elsewhere in this
+  // file (e.g. `sub === state.subEnquiries[sub.id]`) keeps working.
+  const reactiveCache = new WeakMap();
+  function deepWatch(obj, onChange) {
+    if (!obj || typeof obj !== 'object') return obj;
+    if (reactiveCache.has(obj)) return reactiveCache.get(obj);
+    const proxy = new Proxy(obj, {
+      get(target, prop, receiver) {
+        const val = Reflect.get(target, prop, receiver);
+        return (val && typeof val === 'object') ? deepWatch(val, onChange) : val;
+      },
+      set(target, prop, value, receiver) {
+        const changed = !(prop in target) || target[prop] !== value;
+        const ok = Reflect.set(target, prop, value, receiver);
+        if (ok && changed) onChange();
+        return ok;
+      },
+      deleteProperty(target, prop) {
+        const had = prop in target;
+        const ok = Reflect.deleteProperty(target, prop);
+        if (ok && had) onChange();
+        return ok;
+      }
+    });
+    reactiveCache.set(obj, proxy);
+    return proxy;
+  }
+
+  // A Sub-Enquiry mixes both halves: its name/enquiryId only ever show
+  // up in the Hierarchy outline export, while its keywords/templates
+  // only ever show up in the Template Data export. Route each field to
+  // the matching flag instead of watching the whole object as one lump.
+  const subEnquiryCache = new WeakMap();
+  function watchSubEnquiry(sub) {
+    if (!sub || typeof sub !== 'object') return sub;
+    if (subEnquiryCache.has(sub)) return subEnquiryCache.get(sub);
+    const proxy = new Proxy(sub, {
+      get(target, prop, receiver) {
+        const val = Reflect.get(target, prop, receiver);
+        if (prop === 'keywords' || prop === 'templates') return deepWatch(val, markTemplateDataDirty);
+        return (val && typeof val === 'object') ? deepWatch(val, markHierarchyDirty) : val;
+      },
+      set(target, prop, value, receiver) {
+        const changed = !(prop in target) || target[prop] !== value;
+        const ok = Reflect.set(target, prop, value, receiver);
+        if (ok && changed) {
+          if (prop === 'keywords' || prop === 'templates') markTemplateDataDirty();
+          else markHierarchyDirty();
+        }
+        return ok;
+      },
+      deleteProperty(target, prop) {
+        const had = prop in target;
+        const ok = Reflect.deleteProperty(target, prop);
+        if (ok && had) markHierarchyDirty();
+        return ok;
+      }
+    });
+    subEnquiryCache.set(sub, proxy);
+    return proxy;
+  }
+
+  function watchSubEnquiriesDict(dict) {
+    return new Proxy(dict, {
+      get(target, prop, receiver) {
+        return watchSubEnquiry(Reflect.get(target, prop, receiver));
+      },
+      set(target, prop, value, receiver) {
+        const ok = Reflect.set(target, prop, value, receiver);
+        // A Sub-Enquiry node was added or replaced wholesale — treat
+        // as a Hierarchy change; if it already carries templates
+        // (duplicated with contents, imported, etc.) that's new
+        // Template Data too.
+        if (ok) {
+          markHierarchyDirty();
+          if (value && Array.isArray(value.templates) && value.templates.length) markTemplateDataDirty();
+        }
+        return ok;
+      },
+      deleteProperty(target, prop) {
+        const had = prop in target;
+        const ok = Reflect.deleteProperty(target, prop);
+        if (ok && had) markHierarchyDirty();
+        return ok;
+      }
+    });
+  }
+
+  state.schemeIds = deepWatch(state.schemeIds, markHierarchyDirty);
+  state.schemes = deepWatch(state.schemes, markHierarchyDirty);
+  state.categories = deepWatch(state.categories, markHierarchyDirty);
+  state.enquiries = deepWatch(state.enquiries, markHierarchyDirty);
+  state.subEnquiries = watchSubEnquiriesDict(state.subEnquiries);
+
   const expandedIds = new Set(); // runtime-only tree expand/collapse state
 
   // ---------- Hierarchy search toolbar ----------
@@ -92,6 +242,7 @@
   const treeSearchInput = document.getElementById('draft-tree-search-input');
   const treeSearchLevelSelect = document.getElementById('draft-tree-search-level');
   const saveStatusEl = document.getElementById('draft-save-status');
+  const saveWarningEl = document.getElementById('draft-save-warning');
 
   const detailEmpty = document.getElementById('draft-detail-empty');
   const detailContent = document.getElementById('draft-detail-content');
@@ -6037,9 +6188,21 @@
   function markHierarchySaved() {
     lastHierarchySavedAt = new Date();
     updateSaveStatusDisplay();
+    clearHierarchyDirty();
+  }
+
+  // ---------- Template Data "saved" indicator ----------
+  // Mirrors markHierarchySaved() above, but for the templates
+  // themselves (Export .txt/.docx and Copy to clipboard, further down).
+  let lastTemplateDataSavedAt = null;
+
+  function markTemplateDataSaved() {
+    lastTemplateDataSavedAt = new Date();
+    clearTemplateDataDirty();
   }
 
   updateSaveStatusDisplay();
+  updateSaveWarningBar();
   function downloadTextBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -6284,6 +6447,7 @@
     if (!entries) return;
     downloadTextBlob(new Blob([entriesToText(entries)], { type: 'text/plain' }),
       'draft-templates-' + draftTimestamp() + '.txt');
+    markTemplateDataSaved();
   });
 
   function draftHtmlDocument(bodyHTML) {
@@ -6314,6 +6478,7 @@
         templateToClipboardHtml(tpl);
     }).join('');
     downloadTextBlob(window.htmlDocx.asBlob(draftHtmlDocument(body)), 'draft-templates-' + draftTimestamp() + '.docx');
+    markTemplateDataSaved();
   });
 
   if (exportCopyBtn) exportCopyBtn.addEventListener('click', async () => {
@@ -6323,6 +6488,7 @@
       await navigator.clipboard.writeText(entriesToText(entries));
       exportStatusEl.textContent = 'Copied ' + entries.length + ' template' + (entries.length === 1 ? '' : 's') + ' to clipboard.';
       showToast('Copied all templates to clipboard.');
+      markTemplateDataSaved();
     } catch (err) {
       showToast('Could not copy \u2014 try downloading instead.');
     }
