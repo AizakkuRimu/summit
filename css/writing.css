@@ -49,6 +49,32 @@
 .draft-writing-chip--firm { border-left: 3px solid #8C6B4F; }
 .draft-writing-chip--casual { border-left: 3px solid #7B8FA8; }
 
+/* ---------- Import Paste panel ---------- */
+
+.draft-writing-import {
+  margin: 10px 0 16px;
+  padding: 12px;
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  background: var(--stone-raised);
+}
+
+.draft-writing-import .draft-textarea {
+  min-height: 90px;
+}
+
+.draft-writing-import__hint {
+  margin-top: 6px;
+}
+
+.draft-writing-import__hint code {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  background: var(--bronze-soft);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
 .draft-writing-group {
   margin-bottom: 6px;
 }
