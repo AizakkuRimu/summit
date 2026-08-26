@@ -290,6 +290,7 @@
   const subpanels = {
     tag: document.getElementById('draft-subpanel-tag'),
     find: document.getElementById('draft-subpanel-find'),
+    writing: document.getElementById('draft-subpanel-writing'),
     importexport: document.getElementById('draft-subpanel-importexport')
   };
 
@@ -300,6 +301,12 @@
     });
     Object.keys(subpanels).forEach((key) => { subpanels[key].hidden = key !== name; });
     if (name === 'importexport') { renderExportFilterList(); renderBatchList(); }
+    // Section 10 (writing.js) owns its own render loop — just poke it
+    // when its tab becomes visible so a first-time open (or a re-open
+    // after templates changed elsewhere) shows current data.
+    if (name === 'writing' && window.Summit.writing && window.Summit.writing.onActivate) {
+      window.Summit.writing.onActivate();
+    }
   }
 
   subtabs.forEach((tab) => {
