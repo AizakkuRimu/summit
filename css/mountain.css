@@ -5,6 +5,18 @@
    Colour values come from theme.css tokens throughout.
 --------------------------------------------------------- */
 
+/* ---------- Document / Hikes sub-tab shell ----------
+   .draft-subnav / .draft-subtab / .draft-subpanel (defined in
+   draft.css) are generic primitives reused here as-is so the Mountain
+   sub-tab bar matches Draft's look without duplicating CSS. */
+
+.mountain-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .mountain {
   --page-w: 816px;   /* US Letter, 8.5in @ 96dpi */
   --page-h: 1056px;  /* US Letter, 11in @ 96dpi */
@@ -206,4 +218,353 @@
 .mountain-link-popover__actions {
   display: flex;
   gap: 4px;
+}
+
+/* ============================================================
+   Hikes tab (lighter alternative to the paginated Document view)
+   + its Pathways mode.
+   ============================================================ */
+
+.hikes {
+  height: 100%;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ---------- Sidebar: list of Hikes ---------- */
+
+.hikes-sidebar {
+  flex: none;
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--gray-line);
+  background: var(--stone-raised);
+  overflow: hidden;
+}
+
+.hikes-sidebar__header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 14px 10px;
+}
+
+.hikes-sidebar__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+
+.hikes-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 12px;
+}
+
+.hikes-list__empty {
+  padding: 0 14px 14px;
+}
+
+.hikes-list-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 6px;
+  margin-bottom: 2px;
+}
+
+.hikes-list-item__btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hikes-list-item__btn:hover {
+  background: var(--bronze-soft);
+}
+
+.hikes-list-item.is-active .hikes-list-item__btn {
+  background: var(--bronze);
+  color: var(--stone-raised);
+  font-weight: 600;
+}
+
+.hikes-list-item__delete {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--gray);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.hikes-list-item__delete:hover {
+  background: var(--bronze-soft);
+  color: var(--ink);
+}
+
+/* ---------- Main area ---------- */
+
+.hikes-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.hikes-main__empty {
+  margin: auto;
+  color: var(--gray);
+  font-size: 13.5px;
+}
+
+.hikes-main__content {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 16px 20px;
+  gap: 10px;
+}
+
+.hikes-main__header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.hikes-name-input {
+  flex: 1 1 220px;
+  min-width: 140px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--gray-line);
+  border-radius: 6px;
+  background: var(--stone-raised);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.hikes-name-input:focus-visible {
+  outline: 2px solid var(--bronze);
+  outline-offset: 1px;
+}
+
+.hikes-main__actions {
+  flex: none;
+  display: flex;
+  gap: 8px;
+}
+
+/* ---------- Editor / Pathways mode toggle ---------- */
+
+.hikes-mode-toggle {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--stone);
+  border: 1px solid var(--gray-line);
+}
+
+.hikes-mode-btn {
+  height: 26px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--gray);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.hikes-mode-btn:hover {
+  color: var(--ink);
+}
+
+.hikes-mode-btn[aria-selected="true"] {
+  background: var(--bronze);
+  color: var(--stone-raised);
+}
+
+.hikes-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hikes-view[hidden] {
+  display: none !important;
+}
+
+.hikes-toolbar {
+  flex: none;
+  display: flex;
+  gap: 4px;
+}
+
+.hikes-editor-box {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ---------- Pathways: paragraph blocks ---------- */
+
+.hikes-pathways__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+.hikes-paragraph {
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  background: var(--stone-raised);
+  overflow: hidden;
+}
+
+.hikes-paragraph__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--gray-line);
+  background: var(--stone);
+}
+
+.hikes-paragraph__toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+.hikes-paragraph__index {
+  flex: none;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--gray);
+  padding: 0 4px;
+}
+
+.hikes-paragraph__move-btn,
+.hikes-paragraph__delete-btn {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--gray);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.hikes-paragraph__move-btn:hover:not(:disabled),
+.hikes-paragraph__delete-btn:hover {
+  background: var(--bronze-soft);
+  color: var(--ink);
+}
+
+.hikes-paragraph__move-btn:disabled {
+  opacity: 0.35;
+}
+
+.hikes-paragraph__box {
+  min-height: 60px;
+  padding: 10px 12px;
+}
+
+.hikes-pathways__footer {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+/* ---------- Import-from-template modal ---------- */
+
+.hikes-import__panel {
+  width: min(640px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.hikes-import__filters {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  padding: 4px 0 10px;
+}
+
+.hikes-import__query {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 34px;
+  padding: 0 10px;
+}
+
+.hikes-import__results {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hikes-import__result {
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--stone-raised);
+}
+
+.hikes-import__result-path {
+  font-size: 11px;
+  color: var(--gray);
+  margin: 0 0 4px;
+}
+
+.hikes-import__result-snippet {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.hikes-import__result-snippet a {
+  color: var(--bronze-deep);
 }
