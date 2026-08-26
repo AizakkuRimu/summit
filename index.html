@@ -462,6 +462,8 @@
     <section class="summit-panel" id="panel-draft" role="tabpanel" aria-labelledby="tab-draft" hidden>
       <div class="draft" id="draft">
 
+        <div class="draft-save-warning" id="draft-save-warning" role="status" aria-live="polite" hidden></div>
+
         <nav class="draft-subnav" role="tablist" aria-label="Draft workspace sections">
           <button type="button" class="draft-subtab" role="tab" data-subtab="tag" aria-selected="true" aria-controls="draft-subpanel-tag" id="draft-subtab-tag">Tag</button>
           <button type="button" class="draft-subtab" role="tab" data-subtab="find" aria-selected="false" aria-controls="draft-subpanel-find" id="draft-subtab-find">Find &amp; Search</button>
@@ -477,6 +479,9 @@
           <div class="draft-col draft-col--extract">
             <div class="draft-col__header">
               <h2 class="draft-col__title">Paste &amp; extract Member's Enquiry</h2>
+              <div class="draft-col__header-actions">
+                <button type="button" class="summit-btn" id="draft-faq-import-btn" title="Pull questions and answers out of an FAQ page">Import FAQ</button>
+              </div>
             </div>
             <textarea id="draft-paste-input" class="draft-textarea" placeholder="Paste any block of text here…" aria-label="Text to extract keywords from"></textarea>
             <div class="draft-col__actions">
@@ -695,66 +700,61 @@
 
         </div>
 
-        <!-- Section 10: Writing — verb bank scanned from every template,
-             classified by tone/register, to help pick the right verb
-             for a reply. See js/writing.js. -->
+        <!-- Section 9: Draft tab — Writing (verb finder) -->
         <div class="draft-subpanel" id="draft-subpanel-writing" data-subpanel="writing" role="tabpanel" aria-labelledby="draft-subtab-writing" hidden>
+          <div class="draft-find-layout draft-find-layout--triple">
 
-          <div class="draft-find-layout">
-
+            <!-- 9.1 Scan controls -->
             <div class="draft-col draft-col--find-filters">
               <div class="draft-col__header">
-                <h2 class="draft-col__title">Scan &amp; tone</h2>
+                <h2 class="draft-col__title">Verb Finder</h2>
               </div>
-              <p class="draft-search-help">Scans every template's text for verbs — action verbs (from context like "we <em>confirm</em>" or "to <em>assist</em>") and modal verbs (can/could/would/must…) — and sorts them by how polite, friendly, neutral, firm, or casual they read.</p>
+              <p class="draft-search-help">Scans every saved template for the word right after a pronoun (he / she / you / they / we / it) — skipping past modals like "will" or "should" and helper words like "is" or "has" to land on the actual action word — then sorts what it finds by tone.</p>
 
-              <button type="button" class="summit-btn summit-btn--primary" id="writing-scan-btn">Scan all templates</button>
-              <p class="writing-scan-status" id="writing-scan-status" aria-live="polite">Not scanned yet.</p>
-
-              <h3 class="draft-col__subtitle">Tone</h3>
-              <div class="writing-tone-list" id="writing-tone-list" role="tablist" aria-label="Tone band"></div>
-
-              <label class="draft-field-label" for="writing-search">Search the verb bank</label>
-              <input type="search" id="writing-search" class="draft-search-input" placeholder="e.g. confirm, assist, must…" aria-label="Search verb bank">
-
-              <label class="draft-field-label" for="writing-type-filter">Show</label>
-              <select id="writing-type-filter" class="summit-select">
-                <option value="all">Action + modal verbs</option>
-                <option value="action">Action verbs only</option>
-                <option value="modal">Modal verbs only</option>
-              </select>
-
-              <label class="writing-toggle" for="writing-hide-auto">
-                <input type="checkbox" id="writing-hide-auto">
-                Hide unreviewed (auto-detected) verbs
-              </label>
-
-              <div class="writing-memory">
-                <h3 class="draft-col__subtitle">Reviewed tags</h3>
-                <p class="draft-search-help" id="writing-memory-status">No verbs reassigned yet.</p>
-                <div class="draft-col__actions draft-col__actions--tight writing-memory-actions">
-                  <button type="button" class="summit-btn" id="writing-export-btn" disabled>Export (.json)</button>
-                  <button type="button" class="summit-btn" id="writing-copy-btn" disabled>Copy</button>
-                  <label class="summit-btn draft-smart-import-label" id="writing-import-label">Import&hellip;
-                    <input type="file" id="writing-import-input" accept="application/json" class="draft-smart-import-input">
-                  </label>
-                </div>
+              <div class="draft-col__actions">
+                <button type="button" class="summit-btn summit-btn--primary" id="writing-rescan-btn">Rescan templates</button>
               </div>
+              <p class="draft-deep-index-status" id="writing-scan-status" aria-live="polite"></p>
+
+              <div class="draft-col__subtitle-row">
+                <h3 class="draft-col__subtitle">Modal verbs found</h3>
+                <span class="draft-find-count" id="writing-modals-count"></span>
+              </div>
+              <div class="draft-writing-chips" id="writing-modals-list">
+                <p class="draft-empty-note" id="writing-modals-empty">Rescan to detect modal verbs (will, can, should…).</p>
+              </div>
+
+              <h3 class="draft-col__subtitle">Export</h3>
+              <div class="draft-col__actions">
+                <button type="button" class="summit-btn" id="writing-export-txt-btn">Download .txt</button>
+                <button type="button" class="summit-btn summit-btn--primary" id="writing-export-copy-btn">Copy all to clipboard</button>
+              </div>
+              <p class="draft-deep-index-status" id="writing-export-status" aria-live="polite"></p>
             </div>
 
-            <div class="draft-col" id="writing-results-col">
+            <!-- 9.2 Tone-ranked verbs -->
+            <div class="draft-col draft-col--find-results">
               <div class="draft-col__header">
-                <h2 class="draft-col__title" id="writing-results-title">Verb bank</h2>
-                <span class="draft-find-count" id="writing-results-count"></span>
+                <h2 class="draft-col__title">Verbs by tone</h2>
+                <span class="draft-find-count" id="writing-tones-count"></span>
               </div>
-              <p class="draft-search-help" id="writing-band-desc"></p>
-              <div class="writing-results" id="writing-results">
-                <p class="draft-empty-note" id="writing-empty">Click "Scan all templates" to build the verb bank.</p>
+              <p class="draft-search-help">Most-used verbs first within each tone. Click "Not a verb" wasn't needed here — these are already classified.</p>
+              <div id="writing-tone-groups"></div>
+            </div>
+
+            <!-- 9.3 Unreviewed -->
+            <div class="draft-col draft-col--find-filters">
+              <div class="draft-col__header">
+                <h2 class="draft-col__title">Unreviewed</h2>
+                <span class="draft-find-count" id="writing-unreviewed-count"></span>
+              </div>
+              <p class="draft-search-help">Summit couldn't confidently classify these. Tag one with a tone to file it into the list on the left, or mark it "Not a verb" to hide it for good.</p>
+              <div class="draft-find-results" id="writing-unreviewed-list">
+                <p class="draft-empty-note" id="writing-unreviewed-empty">Rescan templates to populate this list.</p>
               </div>
             </div>
 
           </div>
-
         </div>
 
         <!-- Section 8: Draft tab — Import & Export -->
