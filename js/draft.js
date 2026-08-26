@@ -4119,8 +4119,7 @@
     return templateSegmentsFor((tpl && tpl.template) || '', (tpl && tpl.templateLinks) || []);
   }
 
-  function templateToHtml(tpl) {
-    const segments = templateSegments(tpl);
+  function segmentsToInlineHtml(segments) {
     return segments.map((seg) => {
       let inner = seg.type === 'link'
         ? '<a href="' + escapeHtmlLocal(seg.url) + '" target="_blank" rel="noopener">' + escapeHtmlLocal(seg.text) + '</a>'
@@ -4130,6 +4129,41 @@
       if (seg.underline) inner = '<u>' + inner + '</u>';
       return inner;
     }).join('');
+  }
+
+  function templateToHtml(tpl) {
+    return segmentsToInlineHtml(templateSegments(tpl));
+  }
+
+  // Splits a segment list into paragraphs on blank-line boundaries (two
+  // or more consecutive line breaks) — a single line break stays inside
+  // its paragraph as a wrapped line. Used by listAllTemplateParagraphs()
+  // below so Mountain's Pathways tool can search/import at paragraph
+  // granularity rather than whole templates; a template with no blank
+  // lines at all comes back as one paragraph holding the whole thing.
+  function splitIntoParagraphSegments(segments) {
+    const paragraphs = [[]];
+    let breakRun = 0;
+    segments.forEach((seg) => {
+      if (seg.type === 'text' && seg.value === '\n') {
+        breakRun += 1;
+        if (breakRun >= 2) { paragraphs.push([]); breakRun = 0; return; }
+        paragraphs[paragraphs.length - 1].push(seg);
+        return;
+      }
+      breakRun = 0;
+      paragraphs[paragraphs.length - 1].push(seg);
+    });
+    return paragraphs
+      .map((p) => {
+        // Trim leading/trailing lone line-break segments left over from
+        // a blank-line boundary so a paragraph never starts/ends on an
+        // empty line.
+        while (p.length && p[0].type === 'text' && p[0].value === '\n') p.shift();
+        while (p.length && p[p.length - 1].type === 'text' && p[p.length - 1].value === '\n') p.pop();
+        return p;
+      })
+      .filter((p) => p.some((s) => s.type === 'link' || (s.value && s.value.trim())));
   }
 
   // Clipboard-only variant of templateToHtml. The editor's own model
@@ -7830,6 +7864,44 @@
       }
       const winner = bestGroup[Math.floor(Math.random() * bestGroup.length)];
       return pick(winner);
+    },
+
+    // Flat, paragraph-granular list of every template across the whole
+    // hierarchy — used by Mountain's Pathways tool (Hikes tab) to search
+    // and import a single paragraph rather than a whole template. Each
+    // template's rich text is split on blank-line boundaries the same
+    // way copying-out works elsewhere; a template with no blank lines
+    // comes back as a single paragraph holding its whole text, so
+    // "import a paragraph" still lets you pull in a short template
+    // whole. `html` is already the canonical inline markup (text + <br>
+    // + <a>/<b>/<i>/<u>) ready to drop straight into a Hike.
+    listAllTemplateParagraphs() {
+      const out = [];
+      Object.keys(state.subEnquiries).forEach((subId) => {
+        const sub = state.subEnquiries[subId];
+        const path = pathForSubEnquiry(subId);
+        subTemplates(sub).forEach((tpl) => {
+          const segments = templateSegments(tpl);
+          if (!segments.length) return;
+          const paragraphs = splitIntoParagraphSegments(segments);
+          paragraphs.forEach((paraSegs, idx) => {
+            const text = paraSegs.map((s) => (s.type === 'link' ? s.text : s.value)).join('').replace(/\s+/g, ' ').trim();
+            if (!text) return;
+            out.push({
+              subId,
+              subName: sub.name,
+              path,
+              tplId: tpl.id,
+              tplName: tpl.name,
+              paraIndex: idx,
+              paraCount: paragraphs.length,
+              html: segmentsToInlineHtml(paraSegs),
+              text
+            });
+          });
+        });
+      });
+      return out;
     },
 
     // Switches to the Draft tab, expands the tree to reveal `id`, and

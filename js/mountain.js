@@ -1830,3 +1830,834 @@
     }
   };
 })();
+
+/* ---------------------------------------------------------
+   Summit — mountain.js (Section 2.6: Hikes tab)
+
+   A lighter, non-paginated alternative to the Document view above,
+   for text that just needs to copy out cleanly with its formatting.
+   Uses the same flat contenteditable model as Draft's template
+   editor (text + <br> + <a>/<b>/<i>/<u>) rather than Mountain's own
+   paged Word engine — the rich-text kernel just below is ported
+   from draft.js's template editor so the feel matches exactly.
+
+   Hikes: multiple named documents, switchable in the sidebar.
+   Pathways: a per-Hike mode that splits its text into separate
+   paragraph blocks — add/reorder/delete them, or pull one in
+   whole from any existing template via search — and copies out
+   with a line break inserted between each paragraph.
+
+   Kept as its own IIFE/state, independent of the pagination engine
+   above; Hikes are session-only, same as the Document view.
+--------------------------------------------------------- */
+(function () {
+  'use strict';
+
+  const mtSubtabs = Array.from(document.querySelectorAll('#mountain-shell > .draft-subnav > .draft-subtab'));
+  const mtSubpanels = {
+    document: document.getElementById('mountain-subpanel-document'),
+    hikes: document.getElementById('mountain-subpanel-hikes')
+  };
+  function activateMountainSubtab(name) {
+    if (!mtSubpanels[name]) return;
+    mtSubtabs.forEach((tab) => { if (tab.dataset.subtab) tab.setAttribute('aria-selected', String(tab.dataset.subtab === name)); });
+    Object.keys(mtSubpanels).forEach((key) => { mtSubpanels[key].hidden = key !== name; });
+    if (name === 'hikes') { renderHikesList(); renderActiveHike(); }
+  }
+  mtSubtabs.forEach((tab) => tab.addEventListener('click', () => activateMountainSubtab(tab.dataset.subtab)));
+
+  // ============================================================
+  // Rich-text kernel — ported from Draft's template editor
+  // (draft.js) so Hikes/Pathways feel and behave identically.
+  // ============================================================
+
+  const NO_FORMAT = { bold: false, italic: false, underline: false };
+
+  function escapeHtmlLocal(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function renameEl(el, tagName) {
+    if (el.tagName.toLowerCase() === tagName) return el;
+    const repl = el.ownerDocument.createElement(tagName);
+    while (el.firstChild) repl.appendChild(el.firstChild);
+    el.replaceWith(repl);
+    return repl;
+  }
+
+  // Parses a segment list back out of stored HTML — same shape Draft
+  // uses: [{ type: 'text', value, bold, italic, underline } | { type:
+  // 'link', text, url, bold, italic, underline }], with '\n' text
+  // segments standing in for line breaks.
+  function htmlToSegments(html) {
+    if (!html) return [];
+    const doc = new DOMParser().parseFromString('<div>' + html + '</div>', 'text/html');
+    const root = doc.body.firstChild;
+    const segments = [];
+    (function walk(node, fmt) {
+      Array.from(node.childNodes).forEach((child) => {
+        if (child.nodeType === 3) {
+          if (child.textContent) segments.push(Object.assign({ type: 'text', value: child.textContent }, fmt));
+          return;
+        }
+        if (child.nodeType !== 1) return;
+        const tag = child.tagName;
+        if (tag === 'BR') { segments.push(Object.assign({ type: 'text', value: '\n' }, NO_FORMAT)); return; }
+        if (tag === 'A') {
+          segments.push(Object.assign({ type: 'link', text: child.textContent, url: child.getAttribute('href') || '' }, fmt));
+          return;
+        }
+        const nextFmt = {
+          bold: fmt.bold || tag === 'B',
+          italic: fmt.italic || tag === 'I',
+          underline: fmt.underline || tag === 'U'
+        };
+        walk(child, nextFmt);
+      });
+    }(root, NO_FORMAT));
+    return segments;
+  }
+
+  function segmentsToInlineHtml(segments) {
+    return segments.map((seg) => {
+      let inner = seg.type === 'link'
+        ? '<a href="' + escapeHtmlLocal(seg.url) + '" target="_blank" rel="noopener">' + escapeHtmlLocal(seg.text) + '</a>'
+        : escapeHtmlLocal(seg.value).replace(/\n/g, '<br>');
+      if (seg.bold) inner = '<b>' + inner + '</b>';
+      if (seg.italic) inner = '<i>' + inner + '</i>';
+      if (seg.underline) inner = '<u>' + inner + '</u>';
+      return inner;
+    }).join('');
+  }
+
+  // Splits a segment list into paragraphs on blank-line boundaries
+  // (two or more consecutive line breaks) — mirrors the identical
+  // helper in draft.js so a template's own paragraph split (used by
+  // window.Summit.draft.listAllTemplateParagraphs()) lines up with
+  // how a Hike splits itself in Pathways mode.
+  function splitIntoParagraphSegments(segments) {
+    const paragraphs = [[]];
+    let breakRun = 0;
+    segments.forEach((seg) => {
+      if (seg.type === 'text' && seg.value === '\n') {
+        breakRun += 1;
+        if (breakRun >= 2) { paragraphs.push([]); breakRun = 0; return; }
+        paragraphs[paragraphs.length - 1].push(seg);
+        return;
+      }
+      breakRun = 0;
+      paragraphs[paragraphs.length - 1].push(seg);
+    });
+    return paragraphs
+      .map((p) => {
+        while (p.length && p[0].type === 'text' && p[0].value === '\n') p.shift();
+        while (p.length && p[p.length - 1].type === 'text' && p[p.length - 1].value === '\n') p.pop();
+        return p;
+      })
+      .filter((p) => p.some((s) => s.type === 'link' || (s.value && s.value.trim())));
+  }
+
+  // Clipboard-only rendering: one <div> per line so a bulleted list
+  // opens in Word as one bullet per line instead of one bullet
+  // holding everything (Word's list-autoformat only fires per
+  // paragraph) — same trick as templateToClipboardHtml in draft.js.
+  function htmlStringToClipboardHtml(html) {
+    const segments = htmlToSegments(html);
+    const lines = [[]];
+    segments.forEach((seg) => {
+      if (seg.type === 'text' && seg.value === '\n') { lines.push([]); return; }
+      lines[lines.length - 1].push(seg);
+    });
+    return lines.map((lineSegs) => lineSegs.length
+      ? '<div>' + segmentsToInlineHtml(lineSegs) + '</div>'
+      : '<div><br></div>').join('');
+  }
+
+  function plainTextFromElement(el) {
+    const clone = el.cloneNode(true);
+    Array.from(clone.querySelectorAll('br')).forEach((br) => br.replaceWith('\n'));
+    Array.from(clone.querySelectorAll('div, p')).forEach((elx) => elx.insertAdjacentText('afterend', '\n'));
+    return (clone.textContent || '')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/^\n+|\n+$/g, '');
+  }
+
+  function insertNodeInto(el, node) {
+    el.focus();
+    const sel = window.getSelection();
+    let range;
+    if (sel && sel.rangeCount && el.contains(sel.anchorNode)) {
+      range = sel.getRangeAt(0);
+      range.deleteContents();
+    } else {
+      range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+    }
+    const isFragment = node.nodeType === 11;
+    const anchor = isFragment ? node.lastChild : node;
+    range.insertNode(node);
+    if (anchor && anchor.parentNode) {
+      range.setStartAfter(anchor);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }
+
+  // Sanitizes an editor's live content down to text + <br> + <a href>
+  // + <b> + <i> + <u> before it's stored, same whitelist Draft uses.
+  function sanitizeElementHtml(el) {
+    const clone = el.cloneNode(true);
+    (function clean(node) {
+      Array.from(node.childNodes).forEach((child) => {
+        if (child.nodeType === 3) return;
+        if (child.nodeType !== 1) { child.remove(); return; }
+        let tag = child.tagName;
+        if (tag === 'BR') return;
+        if (tag === 'A') {
+          const href = (child.getAttribute('href') || '').trim();
+          Array.from(child.attributes).forEach((attr) => child.removeAttribute(attr.name));
+          if (href) {
+            child.setAttribute('href', href);
+            child.setAttribute('target', '_blank');
+            child.setAttribute('rel', 'noopener');
+            clean(child);
+          } else {
+            while (child.firstChild) child.parentNode.insertBefore(child.firstChild, child);
+            child.remove();
+          }
+          return;
+        }
+        if (tag === 'STRONG') child = renameEl(child, 'b');
+        else if (tag === 'EM') child = renameEl(child, 'i');
+        if (child.tagName === 'B' || child.tagName === 'I' || child.tagName === 'U') {
+          Array.from(child.attributes).forEach((attr) => child.removeAttribute(attr.name));
+          clean(child);
+          return;
+        }
+        clean(child);
+        while (child.firstChild) child.parentNode.insertBefore(child.firstChild, child);
+        child.remove();
+      });
+    }(clone));
+    return clone.innerHTML;
+  }
+
+  // Simplified counterpart to draft.js's htmlToTemplateFragment: same
+  // whitelist and same li->bullet/number-prefix conversion, but
+  // without draft.js's Word-specific mso-paragraph-merge heuristics —
+  // pasted Word content still comes in clean, just occasionally one
+  // line-wrap short of draft.js's more elaborate cleanup.
+  function htmlToFlatFragment(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const blockSelector = 'p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote';
+
+    Array.from(doc.body.querySelectorAll('strong, b')).forEach((el) => renameEl(el, 'b'));
+    Array.from(doc.body.querySelectorAll('em, i')).forEach((el) => renameEl(el, 'i'));
+
+    Array.from(doc.body.querySelectorAll('a[href]')).forEach((a) => {
+      const href = (a.getAttribute('href') || '').trim();
+      const label = a.textContent.trim();
+      if (!href || !label) { a.replaceWith(document.createTextNode(label)); return; }
+      const clean = document.createElement('a');
+      clean.setAttribute('href', href);
+      clean.setAttribute('target', '_blank');
+      clean.setAttribute('rel', 'noopener');
+      clean.textContent = label;
+      a.replaceWith(clean);
+    });
+
+    Array.from(doc.body.querySelectorAll('li')).forEach((li) => {
+      const ordered = li.parentElement && li.parentElement.tagName === 'OL';
+      let marker = '\u2022 ';
+      if (ordered) {
+        const siblings = Array.from(li.parentElement.children).filter((c) => c.tagName === 'LI');
+        marker = (siblings.indexOf(li) + 1) + '. ';
+      }
+      li.insertBefore(document.createTextNode(marker), li.firstChild);
+    });
+
+    Array.from(doc.body.querySelectorAll(blockSelector)).forEach((el) => {
+      el.insertAdjacentHTML('afterend', '<br>');
+    });
+
+    const KEEP_TAGS = new Set(['A', 'BR', 'B', 'I', 'U']);
+    (function unwrap(node) {
+      Array.from(node.children).forEach((child) => {
+        unwrap(child);
+        if (!KEEP_TAGS.has(child.tagName)) {
+          while (child.firstChild) child.parentNode.insertBefore(child.firstChild, child);
+          child.remove();
+        }
+      });
+    }(doc.body));
+
+    const frag = document.createDocumentFragment();
+    Array.from(doc.body.childNodes).forEach((n) => frag.appendChild(n.cloneNode(true)));
+    return frag;
+  }
+
+  // ---------- Bullet / numbered lines (identical to draft.js) ----------
+  const BULLET_PREFIX = '\u2022 ';
+  const NUMBER_PREFIX_RE = /^\d+\.\s/;
+  const BULLET_PREFIX_RE = /^\u2022 /;
+  const SUPPORTS_SELECTION_MODIFY = typeof window.getSelection === 'function' &&
+    typeof Selection !== 'undefined' && typeof Selection.prototype.modify === 'function';
+
+  function collapseToLineStart(el) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) return null;
+    const collapsed = sel.getRangeAt(0).cloneRange();
+    collapsed.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(collapsed);
+    sel.modify('move', 'backward', 'lineboundary');
+    return sel;
+  }
+
+  function lineTextAndRecollapse(sel) {
+    const atStart = sel.getRangeAt(0).cloneRange();
+    sel.modify('extend', 'forward', 'lineboundary');
+    const text = sel.getRangeAt(0).toString();
+    const restore = atStart.cloneRange();
+    restore.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(restore);
+    return text;
+  }
+
+  function previousLineText(originalCollapsed) {
+    const sel = window.getSelection();
+    sel.modify('move', 'backward', 'character');
+    sel.modify('move', 'backward', 'lineboundary');
+    sel.modify('extend', 'forward', 'lineboundary');
+    const text = sel.getRangeAt(0).toString();
+    const restore = originalCollapsed.cloneRange();
+    restore.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(restore);
+    return text;
+  }
+
+  function nextNumberPrefix(sel) {
+    const originalCollapsed = sel.getRangeAt(0).cloneRange();
+    const prevText = previousLineText(originalCollapsed);
+    const m = NUMBER_PREFIX_RE.exec(prevText);
+    const n = m ? parseInt(m[0], 10) + 1 : 1;
+    return n + '. ';
+  }
+
+  function toggleLinePrefix(el, kind) {
+    el.focus();
+    if (!SUPPORTS_SELECTION_MODIFY) return;
+    const sel = collapseToLineStart(el);
+    if (!sel) return;
+    const lineText = lineTextAndRecollapse(sel);
+    const hasBullet = BULLET_PREFIX_RE.test(lineText);
+    const numberMatch = NUMBER_PREFIX_RE.exec(lineText);
+    const existingLen = hasBullet ? BULLET_PREFIX.length : (numberMatch ? numberMatch[0].length : 0);
+
+    if (existingLen > 0) {
+      for (let i = 0; i < existingLen; i++) sel.modify('extend', 'forward', 'character');
+      document.execCommand('delete');
+    }
+
+    const togglingOffSameKind = (kind === 'bullet' && hasBullet) || (kind === 'number' && !!numberMatch);
+    if (togglingOffSameKind) return;
+
+    const prefix = kind === 'bullet' ? BULLET_PREFIX : nextNumberPrefix(sel);
+    document.execCommand('insertText', false, prefix);
+  }
+
+  function wireRichTextEditing(el) {
+    el.addEventListener('paste', (e) => {
+      const cd = e.clipboardData || window.clipboardData;
+      if (!cd) return;
+      const html = cd.getData('text/html');
+      if (!html) return;
+      e.preventDefault();
+      const frag = htmlToFlatFragment(html);
+      insertNodeInto(el, frag);
+    });
+
+    el.addEventListener('keydown', (e) => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && !e.shiftKey && !e.altKey && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault(); document.execCommand('bold'); return;
+      }
+      if (mod && !e.shiftKey && !e.altKey && (e.key === 'i' || e.key === 'I')) {
+        e.preventDefault(); document.execCommand('italic'); return;
+      }
+      if (mod && !e.shiftKey && !e.altKey && (e.key === 'u' || e.key === 'U')) {
+        e.preventDefault(); document.execCommand('underline'); return;
+      }
+      if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      e.preventDefault();
+      insertNodeInto(el, document.createElement('br'));
+    });
+  }
+
+  function insertLinkInto(el) {
+    const sel = window.getSelection();
+    const selectedText = (sel && sel.rangeCount && el.contains(sel.anchorNode)) ? sel.toString() : '';
+    const url = window.prompt('Link URL:');
+    if (!url || !url.trim()) return false;
+    const label = window.prompt('Link text (leave blank to show the URL itself):', selectedText || '');
+    const trimmedUrl = url.trim();
+    const trimmedLabel = (label || '').trim() || trimmedUrl;
+    const a = document.createElement('a');
+    a.setAttribute('href', trimmedUrl);
+    a.setAttribute('target', '_blank');
+    a.setAttribute('rel', 'noopener');
+    a.textContent = trimmedLabel;
+    insertNodeInto(el, a);
+    return true;
+  }
+
+  // ============================================================
+  // Hikes state + sidebar
+  // ============================================================
+
+  window.Summit = window.Summit || { state: { mountain: {}, peaks: {}, draft: {} } };
+  window.Summit.state.mountain.hikes = window.Summit.state.mountain.hikes || [];
+  window.Summit.state.mountain.activeHikeId = window.Summit.state.mountain.activeHikeId || null;
+  const S = window.Summit.state.mountain;
+
+  let mode = 'editor'; // 'editor' | 'pathways' — applies to whichever Hike is active
+
+  function uidH(prefix) { return prefix + '-' + Math.random().toString(36).slice(2, 10); }
+
+  const hikesListEl = document.getElementById('hikes-list');
+  const hikesListEmptyEl = document.getElementById('hikes-list-empty');
+  const hikesNewBtn = document.getElementById('hikes-new-btn');
+  const hikesEmptyEl = document.getElementById('hikes-empty');
+  const hikesContentEl = document.getElementById('hikes-content');
+  const hikesNameInput = document.getElementById('hikes-name-input');
+  const hikesCopyBtn = document.getElementById('hikes-copy-btn');
+  const hikesDeleteBtn = document.getElementById('hikes-delete-btn');
+
+  const hikesModeEditorBtn = document.getElementById('hikes-mode-editor-btn');
+  const hikesModePathwaysBtn = document.getElementById('hikes-mode-pathways-btn');
+  const hikesEditorViewEl = document.getElementById('hikes-editor-view');
+  const hikesPathwaysViewEl = document.getElementById('hikes-pathways-view');
+
+  const hikesEditorBox = document.getElementById('hikes-editor-box');
+  const hikesBoldBtn = document.getElementById('hikes-bold-btn');
+  const hikesItalicBtn = document.getElementById('hikes-italic-btn');
+  const hikesUnderlineBtn = document.getElementById('hikes-underline-btn');
+  const hikesBulletBtn = document.getElementById('hikes-bullet-btn');
+  const hikesNumberBtn = document.getElementById('hikes-number-btn');
+  const hikesLinkBtn = document.getElementById('hikes-link-btn');
+
+  const hikesPathwaysListEl = document.getElementById('hikes-pathways-list');
+  const hikesAddParagraphBtn = document.getElementById('hikes-add-paragraph-btn');
+  const hikesImportParagraphBtn = document.getElementById('hikes-import-paragraph-btn');
+
+  const toastEl = document.getElementById('summit-toast');
+  let toastTimer = null;
+  function showHikesToast(message) {
+    if (!toastEl) return;
+    toastEl.textContent = message;
+    toastEl.hidden = false;
+    requestAnimationFrame(() => toastEl.classList.add('is-visible'));
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toastEl.classList.remove('is-visible');
+      setTimeout(() => { toastEl.hidden = true; }, 220);
+    }, 4000);
+  }
+
+  function getActiveHike() {
+    return S.hikes.find((h) => h.id === S.activeHikeId) || null;
+  }
+
+  function renderHikesList() {
+    hikesListEl.innerHTML = '';
+    hikesListEmptyEl.hidden = S.hikes.length > 0;
+    S.hikes.forEach((hike) => {
+      const li = document.createElement('li');
+      li.className = 'hikes-list-item' + (hike.id === S.activeHikeId ? ' is-active' : '');
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'hikes-list-item__btn';
+      btn.textContent = hike.name || 'Untitled Hike';
+      btn.title = hike.name || 'Untitled Hike';
+      btn.addEventListener('click', () => selectHike(hike.id));
+      li.appendChild(btn);
+
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'hikes-list-item__delete';
+      del.title = 'Delete this Hike';
+      del.setAttribute('aria-label', 'Delete "' + (hike.name || 'Untitled Hike') + '"');
+      del.textContent = '\u00d7';
+      del.addEventListener('click', (e) => { e.stopPropagation(); deleteHike(hike.id); });
+      li.appendChild(del);
+
+      hikesListEl.appendChild(li);
+    });
+  }
+
+  function selectHike(id) {
+    S.activeHikeId = id;
+    mode = 'editor';
+    renderHikesList();
+    renderActiveHike();
+  }
+
+  function createHike() {
+    const hike = { id: uidH('hike'), name: 'Hike ' + (S.hikes.length + 1), html: '' };
+    S.hikes.push(hike);
+    selectHike(hike.id);
+    requestAnimationFrame(() => hikesNameInput.focus());
+  }
+
+  function deleteHike(id) {
+    const hike = S.hikes.find((h) => h.id === id);
+    if (!hike) return;
+    if (!window.confirm('Delete "' + (hike.name || 'Untitled Hike') + '"? This can\'t be undone.')) return;
+    S.hikes = S.hikes.filter((h) => h.id !== id);
+    if (S.activeHikeId === id) S.activeHikeId = S.hikes.length ? S.hikes[0].id : null;
+    renderHikesList();
+    renderActiveHike();
+  }
+
+  function renderActiveHike() {
+    const hike = getActiveHike();
+    hikesEmptyEl.hidden = !!hike;
+    hikesContentEl.hidden = !hike;
+    if (!hike) return;
+    hikesNameInput.value = hike.name || '';
+    setMode(mode);
+  }
+
+  hikesNewBtn.addEventListener('click', createHike);
+  hikesDeleteBtn.addEventListener('click', () => { if (S.activeHikeId) deleteHike(S.activeHikeId); });
+  hikesNameInput.addEventListener('input', () => {
+    const hike = getActiveHike();
+    if (!hike) return;
+    hike.name = hikesNameInput.value;
+    renderHikesList();
+  });
+
+  // ============================================================
+  // Editor mode — single continuous rich-text box, exactly Draft's
+  // template editor.
+  // ============================================================
+
+  function setMode(next) {
+    mode = next;
+    hikesModeEditorBtn.setAttribute('aria-selected', String(mode === 'editor'));
+    hikesModePathwaysBtn.setAttribute('aria-selected', String(mode === 'pathways'));
+    hikesEditorViewEl.hidden = mode !== 'editor';
+    hikesPathwaysViewEl.hidden = mode !== 'pathways';
+    if (mode === 'editor') renderEditorMode(); else renderPathwaysMode();
+  }
+  hikesModeEditorBtn.addEventListener('click', () => setMode('editor'));
+  hikesModePathwaysBtn.addEventListener('click', () => setMode('pathways'));
+
+  function renderEditorMode() {
+    const hike = getActiveHike();
+    if (!hike) return;
+    hikesEditorBox.innerHTML = hike.html || '';
+  }
+
+  function commitEditorMode() {
+    const hike = getActiveHike();
+    if (!hike) return;
+    hike.html = sanitizeElementHtml(hikesEditorBox);
+  }
+
+  wireRichTextEditing(hikesEditorBox);
+  hikesEditorBox.addEventListener('input', commitEditorMode);
+  hikesBoldBtn.addEventListener('click', () => { hikesEditorBox.focus(); document.execCommand('bold'); });
+  hikesItalicBtn.addEventListener('click', () => { hikesEditorBox.focus(); document.execCommand('italic'); });
+  hikesUnderlineBtn.addEventListener('click', () => { hikesEditorBox.focus(); document.execCommand('underline'); });
+  hikesBulletBtn.addEventListener('click', () => { toggleLinePrefix(hikesEditorBox, 'bullet'); commitEditorMode(); });
+  hikesNumberBtn.addEventListener('click', () => { toggleLinePrefix(hikesEditorBox, 'number'); commitEditorMode(); });
+  hikesLinkBtn.addEventListener('click', () => { if (insertLinkInto(hikesEditorBox)) commitEditorMode(); });
+
+  // ============================================================
+  // Pathways mode — the same Hike's text as separate, reorderable
+  // paragraph blocks. hike.html stays the single source of truth:
+  // switching into Pathways splits it on blank-line boundaries,
+  // and every edit here rejoins the blocks back into hike.html with
+  // a blank line between them, so switching back to Editor (or back
+  // into Pathways later) round-trips cleanly.
+  // ============================================================
+
+  function readParagraphBoxes() {
+    return Array.from(hikesPathwaysListEl.querySelectorAll('.hikes-paragraph__box'));
+  }
+
+  function commitPathwaysToHike() {
+    const hike = getActiveHike();
+    if (!hike) return;
+    hike.html = readParagraphBoxes().map((box) => sanitizeElementHtml(box)).join('<br><br>');
+  }
+
+  function renderPathwaysMode() {
+    const hike = getActiveHike();
+    if (!hike) return;
+    const segments = htmlToSegments(hike.html || '');
+    const paragraphs = splitIntoParagraphSegments(segments);
+    if (!paragraphs.length) paragraphs.push([]); // always leave one block to type into
+    hikesPathwaysListEl.innerHTML = '';
+    paragraphs.forEach((paraSegs, idx) => {
+      hikesPathwaysListEl.appendChild(renderParagraphBlock(segmentsToInlineHtml(paraSegs), idx, paragraphs.length));
+    });
+  }
+
+  function renderParagraphBlock(html, index, total) {
+    const card = document.createElement('div');
+    card.className = 'hikes-paragraph';
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'hikes-paragraph__toolbar';
+
+    const box = document.createElement('div');
+    box.className = 'draft-textarea draft-textarea--template hikes-paragraph__box';
+    box.contentEditable = 'true';
+    box.setAttribute('role', 'textbox');
+    box.setAttribute('aria-multiline', 'true');
+    box.setAttribute('aria-label', 'Paragraph ' + (index + 1) + ' of ' + total);
+    box.setAttribute('data-placeholder', 'Write this paragraph…');
+    box.innerHTML = html;
+    wireRichTextEditing(box);
+    box.addEventListener('input', commitPathwaysToHike);
+
+    const mk = (label, title, onClick) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'summit-btn';
+      b.innerHTML = label;
+      b.title = title;
+      b.addEventListener('mousedown', (e) => e.preventDefault()); // keep focus/selection in box
+      b.addEventListener('click', onClick);
+      return b;
+    };
+
+    toolbar.appendChild(mk('<b>B</b>', 'Bold (Ctrl+B)', () => { box.focus(); document.execCommand('bold'); }));
+    toolbar.appendChild(mk('<i>I</i>', 'Italic (Ctrl+I)', () => { box.focus(); document.execCommand('italic'); }));
+    toolbar.appendChild(mk('<u>U</u>', 'Underline (Ctrl+U)', () => { box.focus(); document.execCommand('underline'); }));
+    toolbar.appendChild(mk('&bull;', 'Toggle bullet on this line', () => { toggleLinePrefix(box, 'bullet'); commitPathwaysToHike(); }));
+    toolbar.appendChild(mk('1.', 'Toggle numbering on this line', () => { toggleLinePrefix(box, 'number'); commitPathwaysToHike(); }));
+    toolbar.appendChild(mk('Link', 'Insert a link at the cursor', () => { if (insertLinkInto(box)) commitPathwaysToHike(); }));
+
+    const spacer = document.createElement('span');
+    spacer.className = 'hikes-paragraph__toolbar-spacer';
+    toolbar.appendChild(spacer);
+
+    const indexLabel = document.createElement('span');
+    indexLabel.className = 'hikes-paragraph__index';
+    indexLabel.textContent = (index + 1) + ' / ' + total;
+    toolbar.appendChild(indexLabel);
+
+    const upBtn = mk('\u2191', 'Move up', () => moveParagraph(index, -1));
+    upBtn.className += ' hikes-paragraph__move-btn';
+    if (index === 0) upBtn.disabled = true;
+    toolbar.appendChild(upBtn);
+
+    const downBtn = mk('\u2193', 'Move down', () => moveParagraph(index, 1));
+    downBtn.className += ' hikes-paragraph__move-btn';
+    if (index === total - 1) downBtn.disabled = true;
+    toolbar.appendChild(downBtn);
+
+    const delBtn = mk('\u2715', 'Delete this paragraph', () => deleteParagraph(index));
+    delBtn.className += ' hikes-paragraph__delete-btn';
+    if (total <= 1) delBtn.disabled = true;
+    toolbar.appendChild(delBtn);
+
+    card.appendChild(toolbar);
+    card.appendChild(box);
+    return card;
+  }
+
+  function currentParagraphHtmlList() {
+    return readParagraphBoxes().map((box) => sanitizeElementHtml(box));
+  }
+
+  function addParagraph() {
+    const hike = getActiveHike();
+    if (!hike) return;
+    const parts = currentParagraphHtmlList();
+    parts.push('');
+    hike.html = parts.join('<br><br>');
+    renderPathwaysMode();
+    requestAnimationFrame(() => {
+      const boxes = readParagraphBoxes();
+      const last = boxes[boxes.length - 1];
+      if (last) last.focus();
+    });
+  }
+
+  function deleteParagraph(index) {
+    const hike = getActiveHike();
+    if (!hike) return;
+    const parts = currentParagraphHtmlList();
+    if (parts.length <= 1) return;
+    parts.splice(index, 1);
+    hike.html = parts.join('<br><br>');
+    renderPathwaysMode();
+  }
+
+  function moveParagraph(index, delta) {
+    const hike = getActiveHike();
+    if (!hike) return;
+    const parts = currentParagraphHtmlList();
+    const target = index + delta;
+    if (target < 0 || target >= parts.length) return;
+    const [item] = parts.splice(index, 1);
+    parts.splice(target, 0, item);
+    hike.html = parts.join('<br><br>');
+    renderPathwaysMode();
+  }
+
+  function insertImportedParagraph(html) {
+    const hike = getActiveHike();
+    if (!hike) return;
+    const parts = currentParagraphHtmlList();
+    parts.push(html);
+    hike.html = parts.join('<br><br>');
+    renderPathwaysMode();
+  }
+
+  hikesAddParagraphBtn.addEventListener('click', addParagraph);
+
+  // ============================================================
+  // Copy out
+  // ============================================================
+
+  async function writeRichClipboard(html, plain) {
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+      try {
+        const item = new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([plain], { type: 'text/plain' })
+        });
+        await navigator.clipboard.write([item]);
+        return true;
+      } catch (err) { /* fall through to plain-text copy below */ }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(plain);
+    return false;
+  }
+
+  async function copyHikeText() {
+    const hike = getActiveHike();
+    if (!hike) return;
+    let html, plain;
+    if (mode === 'pathways') {
+      commitPathwaysToHike();
+      const boxes = readParagraphBoxes();
+      plain = boxes.map((box) => plainTextFromElement(box)).join('\n');
+      html = boxes.map((box) => htmlStringToClipboardHtml(sanitizeElementHtml(box))).join('<br>');
+    } else {
+      commitEditorMode();
+      plain = plainTextFromElement(hikesEditorBox);
+      html = htmlStringToClipboardHtml(hike.html || '');
+    }
+    await writeRichClipboard(html, plain);
+    showHikesToast('Copied to clipboard');
+  }
+  hikesCopyBtn.addEventListener('click', copyHikeText);
+
+  // ============================================================
+  // Import a paragraph from a template (Pathways mode)
+  // ============================================================
+
+  const importModal = document.getElementById('hikes-import-modal');
+  const importQueryInput = document.getElementById('hikes-import-query');
+  const importSubFilterSel = document.getElementById('hikes-import-subfilter');
+  const importResultsEl = document.getElementById('hikes-import-results');
+  const importCountEl = document.getElementById('hikes-import-count');
+
+  function populateImportSubFilter() {
+    const current = importSubFilterSel.value;
+    importSubFilterSel.innerHTML = '<option value="">All Sub-Enquiries</option>';
+    if (!window.Summit.draft || typeof window.Summit.draft.listSubEnquiries !== 'function') return;
+    window.Summit.draft.listSubEnquiries().forEach((sub) => {
+      const opt = document.createElement('option');
+      opt.value = sub.id;
+      opt.textContent = sub.path;
+      importSubFilterSel.appendChild(opt);
+    });
+    importSubFilterSel.value = current || '';
+  }
+
+  function renderImportResult(p) {
+    const card = document.createElement('div');
+    card.className = 'hikes-import__result';
+
+    const path = document.createElement('p');
+    path.className = 'hikes-import__result-path';
+    path.textContent = p.path + (p.tplName ? ' \u2014 ' + p.tplName : '') +
+      (p.paraCount > 1 ? ' (paragraph ' + (p.paraIndex + 1) + ' of ' + p.paraCount + ')' : '');
+    card.appendChild(path);
+
+    const snippet = document.createElement('p');
+    snippet.className = 'hikes-import__result-snippet';
+    snippet.innerHTML = p.html;
+    card.appendChild(snippet);
+
+    const insertBtn = document.createElement('button');
+    insertBtn.type = 'button';
+    insertBtn.className = 'summit-btn summit-btn--primary';
+    insertBtn.textContent = 'Insert';
+    insertBtn.addEventListener('click', () => {
+      insertImportedParagraph(p.html);
+      showHikesToast('Paragraph inserted');
+    });
+    card.appendChild(insertBtn);
+
+    return card;
+  }
+
+  function renderImportResults() {
+    importResultsEl.innerHTML = '';
+    if (!window.Summit.draft || typeof window.Summit.draft.listAllTemplateParagraphs !== 'function') {
+      importCountEl.textContent = 'Template search isn\'t available right now.';
+      return;
+    }
+    const all = window.Summit.draft.listAllTemplateParagraphs();
+    const q = (importQueryInput.value || '').trim().toLowerCase();
+    const subId = importSubFilterSel.value;
+    const filtered = all.filter((p) => {
+      if (subId && p.subId !== subId) return false;
+      if (q && !p.text.toLowerCase().includes(q)) return false;
+      return true;
+    });
+    const shown = filtered.slice(0, 60);
+    importCountEl.textContent = filtered.length
+      ? ('Showing ' + shown.length + ' of ' + filtered.length + ' matching paragraph' + (filtered.length === 1 ? '' : 's'))
+      : (all.length ? 'No paragraphs match your search.' : 'No templates found yet in Draft.');
+    shown.forEach((p) => importResultsEl.appendChild(renderImportResult(p)));
+  }
+
+  function openImportModal() {
+    if (!importModal) return;
+    populateImportSubFilter();
+    importQueryInput.value = '';
+    importModal.hidden = false;
+    importModal.setAttribute('aria-hidden', 'false');
+    renderImportResults();
+    requestAnimationFrame(() => importQueryInput.focus());
+  }
+  function closeImportModal() {
+    if (!importModal) return;
+    importModal.hidden = true;
+    importModal.setAttribute('aria-hidden', 'true');
+  }
+  if (importModal) {
+    importModal.querySelectorAll('[data-hikes-import-close]').forEach((el) => el.addEventListener('click', closeImportModal));
+  }
+  importQueryInput.addEventListener('input', renderImportResults);
+  importSubFilterSel.addEventListener('change', renderImportResults);
+  hikesImportParagraphBtn.addEventListener('click', openImportModal);
+
+  // ---------- Initial paint ----------
+  renderHikesList();
+  renderActiveHike();
+})();
