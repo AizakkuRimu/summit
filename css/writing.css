@@ -1,0 +1,228 @@
+/* ---------------------------------------------------------
+   Summit — writing.css
+   Section 10: Writing tab (verb bank). Reuses .draft-col /
+   .draft-find-layout / .summit-btn / .summit-select from
+   draft.css — this file only adds the tone-band and verb-row
+   pieces that are specific to this tab.
+--------------------------------------------------------- */
+
+:root {
+  --writing-polite:   #5B7C8C;
+  --writing-friendly: #7C8C4A;
+  --writing-neutral:  #6B6660;
+  --writing-firm:     #A6473A;
+  --writing-casual:   #8B6FA0;
+}
+
+[data-theme="dark"] {
+  --writing-polite:   #8FB4C4;
+  --writing-friendly: #ABBE7A;
+  --writing-neutral:  #A39C90;
+  --writing-firm:     #E08A7D;
+  --writing-casual:   #C3A8D6;
+}
+
+.writing-scan-status {
+  font-size: 12px;
+  color: var(--gray);
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
+
+/* ---------- Tone band picker ---------- */
+
+.writing-tone-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.writing-tone-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  background: var(--stone-raised);
+  color: var(--ink);
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.writing-tone-btn:hover {
+  border-color: var(--bronze);
+}
+
+.writing-tone-btn[aria-selected="true"] {
+  background: var(--bronze-soft);
+  border-color: var(--bronze);
+}
+
+.writing-tone-btn__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.writing-tone-btn--polite .writing-tone-btn__dot   { background: var(--writing-polite); }
+.writing-tone-btn--friendly .writing-tone-btn__dot { background: var(--writing-friendly); }
+.writing-tone-btn--neutral .writing-tone-btn__dot  { background: var(--writing-neutral); }
+.writing-tone-btn--firm .writing-tone-btn__dot     { background: var(--writing-firm); }
+.writing-tone-btn--casual .writing-tone-btn__dot   { background: var(--writing-casual); }
+
+.writing-tone-btn__label {
+  flex: 1;
+}
+
+.writing-tone-btn__count {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--gray);
+}
+
+.writing-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--gray);
+  cursor: pointer;
+}
+
+.writing-toggle input {
+  margin: 0;
+}
+
+.writing-memory {
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--gray-line);
+}
+
+.writing-memory-actions {
+  flex-wrap: wrap;
+}
+
+/* ---------- Results column ---------- */
+
+.writing-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.writing-row {
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--stone-raised);
+}
+
+.writing-row__main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.writing-row__verb {
+  font-family: 'Fraunces', serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.writing-row__verb:hover {
+  color: var(--bronze);
+  text-decoration: underline;
+}
+
+.writing-row__type {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: var(--gray);
+  border: 1px solid var(--gray-line);
+}
+
+.writing-row__type--modal {
+  color: var(--bronze-deep);
+  border-color: var(--bronze);
+}
+
+.writing-row__auto {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: var(--flag-red);
+  border: 1px solid var(--flag-red);
+}
+
+.writing-row__count {
+  margin-left: auto;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  color: var(--gray);
+}
+
+.writing-row__example {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--ink);
+  font-style: italic;
+  line-height: 1.5;
+}
+
+.writing-row__path {
+  margin: 2px 0 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  color: var(--gray);
+}
+
+.writing-row__reassign {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--gray);
+}
+
+.writing-row__select {
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--gray-line);
+  background: var(--stone);
+  color: var(--ink);
+}
+
+@media (max-width: 980px) {
+  .writing-tone-list {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .writing-tone-btn {
+    width: auto;
+  }
+}
