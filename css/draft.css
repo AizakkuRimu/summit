@@ -12,6 +12,23 @@
   flex-direction: column;
 }
 
+/* ---------- Unsaved-changes warning bar ---------- */
+
+.draft-save-warning {
+  flex: none;
+  padding: 8px 18px;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-align: center;
+  color: #fff;
+  background: var(--flag-red, #C0392B);
+}
+
+.draft-save-warning[hidden] {
+  display: none;
+}
+
 /* ---------- Sub-tab navigation (Tag / Find / Search / Import-Export) ---------- */
 
 .draft-subnav {
@@ -1636,6 +1653,61 @@
   color: var(--gray);
   line-height: 1.5;
   margin: 0 0 14px;
+}
+
+/* ---------- FAQ Import modal ---------- */
+
+.draft-faq-import__panel {
+  width: min(560px, 92vw);
+}
+
+.draft-faq-import__input {
+  min-height: 120px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12.5px;
+  margin-bottom: 10px;
+}
+
+.draft-faq-import__results {
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.draft-faq-import__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--gray-line);
+  border-radius: 8px;
+  background: var(--stone);
+  cursor: pointer;
+}
+
+.draft-faq-import__item input[type="checkbox"] {
+  margin-top: 3px;
+  flex: none;
+}
+
+.draft-faq-import__item-text {
+  min-width: 0;
+}
+
+.draft-faq-import__item-q {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+  margin-bottom: 3px;
+}
+
+.draft-faq-import__item-a {
+  font-size: 12.5px;
+  color: var(--gray);
+  line-height: 1.4;
 }
 
 .draft-name-helper__hint span {
