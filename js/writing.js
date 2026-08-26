@@ -238,6 +238,14 @@
   const importApplyBtn = document.getElementById('writing-import-apply-btn');
   const importStatusEl = document.getElementById('writing-import-status');
 
+  const reportImportFileBtn = document.getElementById('writing-report-import-file-btn');
+  const reportImportFileInput = document.getElementById('writing-report-import-file');
+  const reportImportToggleBtn = document.getElementById('writing-report-import-toggle-btn');
+  const reportImportPanelEl = document.getElementById('writing-report-import-panel');
+  const reportImportInputEl = document.getElementById('writing-report-import-input');
+  const reportImportApplyBtn = document.getElementById('writing-report-import-apply-btn');
+  const reportImportStatusEl = document.getElementById('writing-report-import-status');
+
   function makeChip(label, count, extraClass) {
     const chip = document.createElement('span');
     chip.className = 'draft-chip draft-writing-chip' + (extraClass ? ' ' + extraClass : '');
@@ -430,6 +438,10 @@
     const unreviewed = sortedEntries(lastScan.verbCounts).filter(([word]) => toneOf(word) === null);
     lines.push('UNREVIEWED (needs classification)');
     lines.push(unreviewed.length ? unreviewed.map(([w, c]) => w + ' (' + c + ')').join(', ') : '(none)');
+    lines.push('');
+
+    lines.push('DISMISSED (marked "not a verb")');
+    lines.push(wState.dismissed.length ? wState.dismissed.slice().sort().join(', ') : '(none)');
 
     return lines.join('\n');
   }
@@ -541,6 +553,116 @@
     if (importStatusEl) importStatusEl.textContent = parts.join(' ');
     if (applied > 0 && importInputEl) importInputEl.value = '';
   });
+
+  // ============================================================
+  // 9.8 — Restoring a previously exported report
+  // ============================================================
+  // Reads back exactly what reportText() writes out: a heading line
+  // (POLITE / FRIENDLY / FIRM / NEUTRAL / CASUAL / DISMISSED / MODAL
+  // VERBS / UNREVIEWED) followed by a comma-separated "word (count)"
+  // list. Only the tone sections and DISMISSED are restored — MODAL
+  // VERBS and UNREVIEWED are always re-derived from the next scan, not
+  // stored choices, so they're deliberately skipped on import.
+
+  const HEADING_MATCHERS = [
+    { test: (h) => h === 'POLITE', kind: 'tone', toneKey: 'polite' },
+    { test: (h) => h === 'FRIENDLY', kind: 'tone', toneKey: 'friendly' },
+    { test: (h) => h === 'CASUAL', kind: 'tone', toneKey: 'casual' },
+    { test: (h) => h === 'FIRM / NEUTRAL' || h === 'FIRM/NEUTRAL' || h === 'FIRM - NEUTRAL', kind: 'tone', toneKey: 'firm' },
+    { test: (h) => h.indexOf('DISMISSED') === 0, kind: 'dismissed' },
+    { test: (h) => h.indexOf('MODAL VERBS') === 0, kind: 'skip' },
+    { test: (h) => h.indexOf('UNREVIEWED') === 0, kind: 'skip' }
+  ];
+
+  function matchHeading(line) {
+    const h = line.trim().toUpperCase();
+    for (let i = 0; i < HEADING_MATCHERS.length; i += 1) {
+      if (HEADING_MATCHERS[i].test(h)) return HEADING_MATCHERS[i];
+    }
+    return null;
+  }
+
+  // Pulls bare words out of a "word (5), word2 (3)" style content line,
+  // ignoring the "(none found)" / "(none)" placeholders reportText()
+  // writes when a section is empty.
+  function wordsFromContentLine(line) {
+    return line.split(',')
+      .map((piece) => {
+        const m = piece.trim().match(/^([a-zA-Z][a-zA-Z'\-]*)\s*(?:\(\d+\))?$/);
+        return m ? m[1].toLowerCase() : null;
+      })
+      .filter(Boolean);
+  }
+
+  function parseReportText(text) {
+    const toneAssignments = {}; // word -> toneKey
+    const dismissed = [];
+    let current = null; // one of HEADING_MATCHERS entries, or null
+
+    text.split('\n').forEach((rawLine) => {
+      const line = rawLine.trim();
+      if (!line) return;
+      const heading = matchHeading(line);
+      if (heading) { current = heading; return; }
+      if (!current || current.kind === 'skip') return;
+
+      const words = wordsFromContentLine(line);
+      if (current.kind === 'tone') {
+        words.forEach((w) => { toneAssignments[w] = current.toneKey; });
+      } else if (current.kind === 'dismissed') {
+        words.forEach((w) => dismissed.push(w));
+      }
+    });
+
+    return { toneAssignments, dismissed };
+  }
+
+  function applyParsedReport(text, statusEl) {
+    if (!text || !text.trim()) {
+      if (statusEl) statusEl.textContent = 'Paste or load a report first.';
+      return;
+    }
+    const { toneAssignments, dismissed } = parseReportText(text);
+    const toneCount = Object.keys(toneAssignments).length;
+    if (toneCount === 0 && dismissed.length === 0) {
+      if (statusEl) statusEl.textContent = "Couldn't find any recognizable sections in that text — make sure it's an exported verb report.";
+      return;
+    }
+    Object.assign(wState.customTone, toneAssignments);
+    dismissed.forEach((w) => { if (!wState.dismissed.includes(w)) wState.dismissed.push(w); });
+    rescan(); // re-scan so dismissed words drop out and the restored tones apply immediately
+    if (statusEl) {
+      statusEl.textContent = 'Restored ' + toneCount + ' classification' + (toneCount === 1 ? '' : 's') +
+        (dismissed.length ? ' and ' + dismissed.length + ' dismissed word' + (dismissed.length === 1 ? '' : 's') + '.' : '.');
+    }
+  }
+
+  if (reportImportToggleBtn) reportImportToggleBtn.addEventListener('click', () => {
+    const willShow = reportImportPanelEl.hidden;
+    reportImportPanelEl.hidden = !willShow;
+    reportImportToggleBtn.setAttribute('aria-expanded', String(willShow));
+  });
+
+  if (reportImportApplyBtn) reportImportApplyBtn.addEventListener('click', () => {
+    applyParsedReport(reportImportInputEl ? reportImportInputEl.value : '', reportImportStatusEl);
+  });
+
+  if (reportImportFileBtn && reportImportFileInput) {
+    reportImportFileBtn.addEventListener('click', () => reportImportFileInput.click());
+    reportImportFileInput.addEventListener('change', async () => {
+      const file = reportImportFileInput.files[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        if (reportImportInputEl) reportImportInputEl.value = text;
+        applyParsedReport(text, reportImportStatusEl);
+      } catch (err) {
+        if (reportImportStatusEl) reportImportStatusEl.textContent = 'Could not read that file.';
+      } finally {
+        reportImportFileInput.value = '';
+      }
+    });
+  }
 
   // ---------- Public API for draft.js to call on tab activation ----------
   window.Summit.writing = { render };
