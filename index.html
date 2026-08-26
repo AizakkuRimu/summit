@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="css/mountain.css">
 <link rel="stylesheet" href="css/peaks.css">
 <link rel="stylesheet" href="css/draft.css">
+<link rel="stylesheet" href="css/writing.css">
 <link rel="stylesheet" href="css/bot.css">
 </head>
 <body>
@@ -461,11 +462,10 @@
     <section class="summit-panel" id="panel-draft" role="tabpanel" aria-labelledby="tab-draft" hidden>
       <div class="draft" id="draft">
 
-        <div class="draft-save-warning" id="draft-save-warning" role="status" aria-live="polite" hidden></div>
-
         <nav class="draft-subnav" role="tablist" aria-label="Draft workspace sections">
           <button type="button" class="draft-subtab" role="tab" data-subtab="tag" aria-selected="true" aria-controls="draft-subpanel-tag" id="draft-subtab-tag">Tag</button>
           <button type="button" class="draft-subtab" role="tab" data-subtab="find" aria-selected="false" aria-controls="draft-subpanel-find" id="draft-subtab-find">Find &amp; Search</button>
+          <button type="button" class="draft-subtab" role="tab" data-subtab="writing" aria-selected="false" aria-controls="draft-subpanel-writing" id="draft-subtab-writing">Writing</button>
           <button type="button" class="draft-subtab" role="tab" data-subtab="importexport" aria-selected="false" aria-controls="draft-subpanel-importexport" id="draft-subtab-importexport">Import/Export</button>
         </nav>
 
@@ -477,9 +477,6 @@
           <div class="draft-col draft-col--extract">
             <div class="draft-col__header">
               <h2 class="draft-col__title">Paste &amp; extract Member's Enquiry</h2>
-              <div class="draft-col__header-actions">
-                <button type="button" class="summit-btn" id="draft-faq-import-btn" title="Pull questions and answers out of an FAQ page">Import FAQ</button>
-              </div>
             </div>
             <textarea id="draft-paste-input" class="draft-textarea" placeholder="Paste any block of text here…" aria-label="Text to extract keywords from"></textarea>
             <div class="draft-col__actions">
@@ -698,6 +695,68 @@
 
         </div>
 
+        <!-- Section 10: Writing — verb bank scanned from every template,
+             classified by tone/register, to help pick the right verb
+             for a reply. See js/writing.js. -->
+        <div class="draft-subpanel" id="draft-subpanel-writing" data-subpanel="writing" role="tabpanel" aria-labelledby="draft-subtab-writing" hidden>
+
+          <div class="draft-find-layout">
+
+            <div class="draft-col draft-col--find-filters">
+              <div class="draft-col__header">
+                <h2 class="draft-col__title">Scan &amp; tone</h2>
+              </div>
+              <p class="draft-search-help">Scans every template's text for verbs — action verbs (from context like "we <em>confirm</em>" or "to <em>assist</em>") and modal verbs (can/could/would/must…) — and sorts them by how polite, friendly, neutral, firm, or casual they read.</p>
+
+              <button type="button" class="summit-btn summit-btn--primary" id="writing-scan-btn">Scan all templates</button>
+              <p class="writing-scan-status" id="writing-scan-status" aria-live="polite">Not scanned yet.</p>
+
+              <h3 class="draft-col__subtitle">Tone</h3>
+              <div class="writing-tone-list" id="writing-tone-list" role="tablist" aria-label="Tone band"></div>
+
+              <label class="draft-field-label" for="writing-search">Search the verb bank</label>
+              <input type="search" id="writing-search" class="draft-search-input" placeholder="e.g. confirm, assist, must…" aria-label="Search verb bank">
+
+              <label class="draft-field-label" for="writing-type-filter">Show</label>
+              <select id="writing-type-filter" class="summit-select">
+                <option value="all">Action + modal verbs</option>
+                <option value="action">Action verbs only</option>
+                <option value="modal">Modal verbs only</option>
+              </select>
+
+              <label class="writing-toggle" for="writing-hide-auto">
+                <input type="checkbox" id="writing-hide-auto">
+                Hide unreviewed (auto-detected) verbs
+              </label>
+
+              <div class="writing-memory">
+                <h3 class="draft-col__subtitle">Reviewed tags</h3>
+                <p class="draft-search-help" id="writing-memory-status">No verbs reassigned yet.</p>
+                <div class="draft-col__actions draft-col__actions--tight writing-memory-actions">
+                  <button type="button" class="summit-btn" id="writing-export-btn" disabled>Export (.json)</button>
+                  <button type="button" class="summit-btn" id="writing-copy-btn" disabled>Copy</button>
+                  <label class="summit-btn draft-smart-import-label" id="writing-import-label">Import&hellip;
+                    <input type="file" id="writing-import-input" accept="application/json" class="draft-smart-import-input">
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="draft-col" id="writing-results-col">
+              <div class="draft-col__header">
+                <h2 class="draft-col__title" id="writing-results-title">Verb bank</h2>
+                <span class="draft-find-count" id="writing-results-count"></span>
+              </div>
+              <p class="draft-search-help" id="writing-band-desc"></p>
+              <div class="writing-results" id="writing-results">
+                <p class="draft-empty-note" id="writing-empty">Click "Scan all templates" to build the verb bank.</p>
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
         <!-- Section 8: Draft tab — Import & Export -->
         <div class="draft-subpanel" id="draft-subpanel-importexport" data-subpanel="importexport" role="tabpanel" aria-labelledby="draft-subtab-importexport" hidden>
         <div class="draft-find-layout">
@@ -875,6 +934,7 @@
   <script src="js/mountain.js"></script>
   <script src="js/peaks.js"></script>
   <script src="js/draft.js"></script>
+  <script src="js/writing.js"></script>
   <script src="js/data.js"></script>
   <script src="js/bot.js"></script>
 </body>
