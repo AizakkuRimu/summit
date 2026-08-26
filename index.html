@@ -730,6 +730,22 @@
                 <button type="button" class="summit-btn summit-btn--primary" id="writing-export-copy-btn">Copy all to clipboard</button>
               </div>
               <p class="draft-deep-index-status" id="writing-export-status" aria-live="polite"></p>
+
+              <h3 class="draft-col__subtitle">Import</h3>
+              <p class="draft-search-help">Nothing here survives a reload — bring back a report you exported earlier (or one a colleague sent you) to restore its Polite/Friendly/Firm-Neutral/Casual and Dismissed classifications.</p>
+              <input type="file" id="writing-report-import-file" accept=".txt" hidden>
+              <div class="draft-col__actions">
+                <button type="button" class="summit-btn" id="writing-report-import-file-btn">Upload .txt…</button>
+                <button type="button" class="summit-btn" id="writing-report-import-toggle-btn" aria-expanded="false" aria-controls="writing-report-import-panel">Paste report</button>
+              </div>
+              <div class="draft-writing-import" id="writing-report-import-panel" hidden>
+                <label class="draft-field-label" for="writing-report-import-input">Paste an exported verb report</label>
+                <textarea id="writing-report-import-input" class="draft-textarea" placeholder="Paste the contents of a summit-verb-report-*.txt file here…"></textarea>
+                <div class="draft-col__actions">
+                  <button type="button" class="summit-btn summit-btn--primary" id="writing-report-import-apply-btn">Restore classifications</button>
+                </div>
+              </div>
+              <p class="draft-deep-index-status" id="writing-report-import-status" aria-live="polite"></p>
             </div>
 
             <!-- 9.2 Tone-ranked verbs -->
