@@ -230,6 +230,14 @@
   const exportCopyBtn = document.getElementById('writing-export-copy-btn');
   const exportStatusEl = document.getElementById('writing-export-status');
 
+  const unreviewedCopyBtn = document.getElementById('writing-unreviewed-copy-btn');
+  const unreviewedCopyStatusEl = document.getElementById('writing-unreviewed-copy-status');
+  const importToggleBtn = document.getElementById('writing-import-toggle-btn');
+  const importPanelEl = document.getElementById('writing-import-panel');
+  const importInputEl = document.getElementById('writing-import-input');
+  const importApplyBtn = document.getElementById('writing-import-apply-btn');
+  const importStatusEl = document.getElementById('writing-import-status');
+
   function makeChip(label, count, extraClass) {
     const chip = document.createElement('span');
     chip.className = 'draft-chip draft-writing-chip' + (extraClass ? ' ' + extraClass : '');
@@ -440,6 +448,98 @@
     } catch (err) {
       if (exportStatusEl) exportStatusEl.textContent = 'Could not copy \u2014 try Download .txt instead.';
     }
+  });
+
+  // ============================================================
+  // 9.7 — Round-trip through an outside LLM (ChatGPT/Claude/etc.)
+  // ============================================================
+  // "Copy unreviewed list" hands over just the bare words, one per
+  // line, so they're easy to paste into a prompt like: "sort these
+  // email verbs into Polite / Friendly / Firm-Neutral / Casual, one
+  // per line as 'word - Tone'". "Import Paste" then reads that answer
+  // back in and files each word in a single pass.
+
+  function currentUnreviewedWords() {
+    if (!lastScan) return [];
+    return sortedEntries(lastScan.verbCounts)
+      .filter(([word]) => toneOf(word) === null)
+      .map(([word]) => word);
+  }
+
+  if (unreviewedCopyBtn) unreviewedCopyBtn.addEventListener('click', async () => {
+    const words = currentUnreviewedWords();
+    if (words.length === 0) {
+      if (unreviewedCopyStatusEl) unreviewedCopyStatusEl.textContent = 'Nothing unreviewed to copy.';
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(words.join('\n'));
+      if (unreviewedCopyStatusEl) unreviewedCopyStatusEl.textContent = 'Copied ' + words.length + ' word' + (words.length === 1 ? '' : 's') + ' to clipboard.';
+    } catch (err) {
+      if (unreviewedCopyStatusEl) unreviewedCopyStatusEl.textContent = 'Could not copy — select and copy the words from the list below instead.';
+    }
+  });
+
+  if (importToggleBtn) importToggleBtn.addEventListener('click', () => {
+    const willShow = importPanelEl.hidden;
+    importPanelEl.hidden = !willShow;
+    importToggleBtn.setAttribute('aria-expanded', String(willShow));
+  });
+
+  // Accepts "word - Tone", "word: Tone", "word – Tone", any casing,
+  // and "Firm/Neutral" in any of its usual spellings (firm, neutral,
+  // firm-neutral, firm/neutral, firmneutral all resolve to the same
+  // bucket).
+  function normalizeToneText(raw) {
+    const squashed = raw.toLowerCase().replace(/[^a-z]/g, '');
+    if (squashed.indexOf('polite') !== -1) return 'polite';
+    if (squashed.indexOf('friendly') !== -1) return 'friendly';
+    if (squashed.indexOf('casual') !== -1) return 'casual';
+    if (squashed.indexOf('firm') !== -1 || squashed.indexOf('neutral') !== -1) return 'firm';
+    return null;
+  }
+
+  function parseImportLines(text) {
+    const results = []; // { word, toneKey, raw, ok, reason }
+    text.split('\n').forEach((rawLine) => {
+      const line = rawLine.trim();
+      if (!line) return;
+      const match = line.match(/^([a-zA-Z][a-zA-Z'\-]*)\s*[-:\u2013\u2014]\s*(.+)$/);
+      if (!match) { results.push({ raw: line, ok: false, reason: 'unrecognized format' }); return; }
+      const word = match[1].toLowerCase().trim();
+      const toneKey = normalizeToneText(match[2]);
+      if (!toneKey) { results.push({ raw: line, word, ok: false, reason: 'unrecognized tone' }); return; }
+      results.push({ raw: line, word, toneKey, ok: true });
+    });
+    return results;
+  }
+
+  if (importApplyBtn) importApplyBtn.addEventListener('click', () => {
+    const text = importInputEl ? importInputEl.value : '';
+    if (!text.trim()) {
+      if (importStatusEl) importStatusEl.textContent = 'Paste some "verb - Tone" lines first.';
+      return;
+    }
+    const parsed = parseImportLines(text);
+    const stillUnreviewed = new Set(currentUnreviewedWords());
+    let applied = 0;
+    let notUnreviewed = 0;
+    let malformed = 0;
+
+    parsed.forEach((row) => {
+      if (!row.ok) { malformed += 1; return; }
+      if (!stillUnreviewed.has(row.word)) { notUnreviewed += 1; return; }
+      wState.customTone[row.word] = row.toneKey;
+      applied += 1;
+    });
+
+    renderAll();
+
+    const parts = ['Applied ' + applied + ' classification' + (applied === 1 ? '' : 's') + '.'];
+    if (notUnreviewed) parts.push(notUnreviewed + ' line' + (notUnreviewed === 1 ? '' : 's') + ' skipped — not currently in Unreviewed.');
+    if (malformed) parts.push(malformed + ' line' + (malformed === 1 ? '' : 's') + " skipped — couldn't read the format.");
+    if (importStatusEl) importStatusEl.textContent = parts.join(' ');
+    if (applied > 0 && importInputEl) importInputEl.value = '';
   });
 
   // ---------- Public API for draft.js to call on tab activation ----------
