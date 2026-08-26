@@ -301,11 +301,11 @@
     });
     Object.keys(subpanels).forEach((key) => { subpanels[key].hidden = key !== name; });
     if (name === 'importexport') { renderExportFilterList(); renderBatchList(); }
-    // Section 10 (writing.js) owns its own render loop — just poke it
-    // when its tab becomes visible so a first-time open (or a re-open
-    // after templates changed elsewhere) shows current data.
-    if (name === 'writing' && window.Summit.writing && window.Summit.writing.onActivate) {
-      window.Summit.writing.onActivate();
+    // Section 9 (Writing / verb finder) lives in its own file (writing.js)
+    // so it can be dropped in or removed independently of the rest of the
+    // Draft tab. It registers itself on window.Summit.writing once loaded.
+    if (name === 'writing' && window.Summit.writing && typeof window.Summit.writing.render === 'function') {
+      window.Summit.writing.render();
     }
   }
 
