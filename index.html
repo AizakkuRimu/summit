@@ -57,6 +57,14 @@
 
   <main class="summit-main">
     <section class="summit-panel" id="panel-mountain" role="tabpanel" aria-labelledby="tab-mountain">
+      <div class="mountain-shell" id="mountain-shell">
+
+      <div class="draft-subnav" role="tablist" aria-label="Mountain views">
+        <button type="button" class="draft-subtab" role="tab" data-subtab="document" aria-selected="true" aria-controls="mountain-subpanel-document" id="mountain-subtab-document">Document</button>
+        <button type="button" class="draft-subtab" role="tab" data-subtab="hikes" aria-selected="false" aria-controls="mountain-subpanel-hikes" id="mountain-subtab-hikes">Hikes</button>
+      </div>
+
+      <div class="draft-subpanel" id="mountain-subpanel-document" data-subpanel="document" role="tabpanel" aria-labelledby="mountain-subtab-document">
       <div class="mountain" id="mountain" data-page-size="letter">
 
         <div class="summit-toolbar mountain-toolbar" role="toolbar" aria-label="Mountain formatting toolbar">
@@ -189,6 +197,67 @@
             <button type="button" class="summit-btn summit-btn--primary" data-action="link-save">Save</button>
           </div>
         </div>
+
+      </div>
+      </div>
+
+      <div class="draft-subpanel" id="mountain-subpanel-hikes" data-subpanel="hikes" role="tabpanel" aria-labelledby="mountain-subtab-hikes" hidden>
+        <div class="hikes" id="hikes">
+
+          <aside class="hikes-sidebar">
+            <div class="hikes-sidebar__header">
+              <h3 class="hikes-sidebar__title">Hikes</h3>
+              <button type="button" class="summit-btn summit-btn--primary" id="hikes-new-btn" title="Create a new Hike">+ New</button>
+            </div>
+            <ul class="hikes-list" id="hikes-list"></ul>
+            <p class="draft-empty-note hikes-list__empty" id="hikes-list-empty">No Hikes yet — create one to start writing.</p>
+          </aside>
+
+          <div class="hikes-main" id="hikes-main">
+            <p class="hikes-main__empty" id="hikes-empty">Select a Hike on the left, or create a new one, to start writing.</p>
+
+            <div class="hikes-main__content" id="hikes-content" hidden>
+              <div class="hikes-main__header">
+                <input type="text" class="hikes-name-input" id="hikes-name-input" aria-label="Hike name" placeholder="Untitled Hike">
+
+                <div class="hikes-mode-toggle" role="tablist" aria-label="Hike mode">
+                  <button type="button" class="hikes-mode-btn" role="tab" data-mode="editor" aria-selected="true" id="hikes-mode-editor-btn">Editor</button>
+                  <button type="button" class="hikes-mode-btn" role="tab" data-mode="pathways" aria-selected="false" id="hikes-mode-pathways-btn">Pathways</button>
+                </div>
+
+                <div class="hikes-main__actions">
+                  <button type="button" class="summit-btn summit-btn--primary" id="hikes-copy-btn">Copy text</button>
+                  <button type="button" class="summit-btn" id="hikes-delete-btn" title="Delete this Hike">Delete</button>
+                </div>
+              </div>
+
+              <!-- Editor mode: single rich-text box, exactly the Draft template editor -->
+              <div class="hikes-view" id="hikes-editor-view">
+                <div class="hikes-toolbar" role="toolbar" aria-label="Hike formatting toolbar">
+                  <button type="button" class="summit-btn" id="hikes-bold-btn" title="Bold (Ctrl+B)"><b>B</b></button>
+                  <button type="button" class="summit-btn" id="hikes-italic-btn" title="Italic (Ctrl+I)"><i>I</i></button>
+                  <button type="button" class="summit-btn" id="hikes-underline-btn" title="Underline (Ctrl+U)"><u>U</u></button>
+                  <button type="button" class="summit-btn" id="hikes-bullet-btn" title="Toggle bullet on this line">&bull;</button>
+                  <button type="button" class="summit-btn" id="hikes-number-btn" title="Toggle numbering on this line">1.</button>
+                  <button type="button" class="summit-btn" id="hikes-link-btn" title="Insert a link at the cursor">Insert link</button>
+                </div>
+                <div id="hikes-editor-box" class="draft-textarea draft-textarea--template hikes-editor-box" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Hike text" data-placeholder="Write your Hike here… (bold/underline/links copy out cleanly)"></div>
+              </div>
+
+              <!-- Pathways mode: the same Hike's text as separate paragraph blocks -->
+              <div class="hikes-view" id="hikes-pathways-view" hidden>
+                <p class="draft-search-help">Each block below copies out as its own paragraph, with a line break inserted between them. Reorder, add, or remove blocks, or pull one in from an existing template.</p>
+                <div class="hikes-pathways__list" id="hikes-pathways-list"></div>
+                <div class="hikes-pathways__footer">
+                  <button type="button" class="summit-btn" id="hikes-add-paragraph-btn">+ Add paragraph</button>
+                  <button type="button" class="summit-btn" id="hikes-import-paragraph-btn">Import from template…</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
 
       </div>
     </section>
@@ -950,6 +1019,26 @@
         <button type="button" class="summit-btn" data-template-expand-close>Cancel</button>
         <button type="button" class="summit-btn summit-btn--primary" id="draft-template-expand-apply-btn">Apply</button>
       </div>
+    </div>
+  </div>
+
+  <div class="summit-modal" id="hikes-import-modal" hidden aria-hidden="true">
+    <div class="summit-modal__backdrop" data-hikes-import-close></div>
+    <div class="summit-modal__panel hikes-import__panel" role="dialog" aria-modal="true" aria-labelledby="hikes-import-title">
+      <div class="summit-modal__header">
+        <h2 class="summit-modal__title" id="hikes-import-title">Import a paragraph from a template</h2>
+        <button type="button" class="summit-modal__close" data-hikes-import-close aria-label="Close">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><line x1="4" y1="4" x2="16" y2="16"/><line x1="16" y1="4" x2="4" y2="16"/></svg>
+        </button>
+      </div>
+      <div class="hikes-import__filters">
+        <input type="text" id="hikes-import-query" class="draft-textarea hikes-import__query" placeholder="Search paragraph text…" aria-label="Search paragraph text">
+        <select id="hikes-import-subfilter" class="summit-select" aria-label="Filter by Sub-Enquiry">
+          <option value="">All Sub-Enquiries</option>
+        </select>
+      </div>
+      <p class="draft-find-count" id="hikes-import-count"></p>
+      <div class="hikes-import__results" id="hikes-import-results"></div>
     </div>
   </div>
 
