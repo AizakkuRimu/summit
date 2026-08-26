@@ -748,7 +748,24 @@
                 <h2 class="draft-col__title">Unreviewed</h2>
                 <span class="draft-find-count" id="writing-unreviewed-count"></span>
               </div>
-              <p class="draft-search-help">Summit couldn't confidently classify these. Tag one with a tone to file it into the list on the left, or mark it "Not a verb" to hide it for good.</p>
+              <p class="draft-search-help">Summit couldn't confidently classify these. Tag one with a tone to file it into the list on the left, mark it "Not a verb" to hide it for good, or send the whole list to ChatGPT/Claude and paste the answer back in below.</p>
+
+              <div class="draft-col__actions">
+                <button type="button" class="summit-btn" id="writing-unreviewed-copy-btn">Copy unreviewed list</button>
+                <button type="button" class="summit-btn" id="writing-import-toggle-btn" aria-expanded="false" aria-controls="writing-import-panel">Import Paste</button>
+              </div>
+              <p class="draft-deep-index-status" id="writing-unreviewed-copy-status" aria-live="polite"></p>
+
+              <div class="draft-writing-import" id="writing-import-panel" hidden>
+                <label class="draft-field-label" for="writing-import-input">Paste "verb - Tone" lines here</label>
+                <textarea id="writing-import-input" class="draft-textarea" placeholder="refer - Friendly&#10;pleased - Polite&#10;require - Firm/Neutral&#10;grab - Casual"></textarea>
+                <p class="draft-search-help draft-writing-import__hint">One per line, in the form <code>verb - Tone</code>. Tone can be Polite, Friendly, Firm/Neutral (or just Firm/Neutral), or Casual — case doesn't matter. Anything that isn't currently in Unreviewed is skipped.</p>
+                <div class="draft-col__actions">
+                  <button type="button" class="summit-btn summit-btn--primary" id="writing-import-apply-btn">Apply classifications</button>
+                </div>
+                <p class="draft-deep-index-status" id="writing-import-status" aria-live="polite"></p>
+              </div>
+
               <div class="draft-find-results" id="writing-unreviewed-list">
                 <p class="draft-empty-note" id="writing-unreviewed-empty">Rescan templates to populate this list.</p>
               </div>
