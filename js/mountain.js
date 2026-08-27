@@ -2324,6 +2324,7 @@
     const hike = getActiveHike();
     if (!hike) return;
     hike.html = markupTextToHtml(hikesEditorBox.value);
+    hike.pathwaysDirty = true;
   }
 
   hikesEditorBox.addEventListener('input', commitEditorMode);
@@ -2335,60 +2336,151 @@
   hikesLinkBtn.addEventListener('click', () => insertLinkInTextarea(hikesEditorBox));
 
   // ============================================================
-  // Pathways mode — the same Hike's text as separate, reorderable
-  // paragraph blocks. hike.html stays the single source of truth:
-  // switching into Pathways splits it on blank-line boundaries,
-  // and every edit here rejoins the blocks back into hike.html with
-  // a blank line between them, so switching back to Editor (or back
-  // into Pathways later) round-trips cleanly.
+  // Pathways mode — the same Hike's text as separate, reorderable,
+  // collapsible paragraph blocks (an accordion with vertical scroll).
+  // hike.pathwaysBlocks is the source of truth *while in Pathways
+  // mode*: each block is a stable { id, html, expanded } object, so
+  // add/delete/duplicate/move/import/collapse operate on that array
+  // directly and never re-derive it from joined HTML (that round trip
+  // is what silently ate empty paragraphs before). hike.html is kept
+  // in sync from the blocks on every edit, so Editor mode and
+  // "Copy text" always see the current content. Editor mode stays the
+  // single source of truth *while in Editor mode*: editing there
+  // marks the Hike dirty so the next time Pathways is opened it
+  // re-splits fresh from hike.html on blank-line boundaries, exactly
+  // like before.
   // ============================================================
 
   function readParagraphBoxes() {
     return Array.from(hikesPathwaysListEl.querySelectorAll('.hikes-paragraph__box'));
   }
 
+  function joinBlocksToHtml(blocks) {
+    return blocks.map((b) => b.html).join('<br><br>');
+  }
+
+  // Splits a Hike's stored HTML into paragraph blocks. A brand-new/
+  // empty Hike starts with 5 blank paragraphs to fill in, rather than
+  // a single empty one.
+  function deriveBlocksFromHtml(html) {
+    const segments = htmlToSegments(html || '');
+    const paragraphs = splitIntoParagraphSegments(segments);
+    let htmls = paragraphs.map((paraSegs) => segmentsToInlineHtml(paraSegs));
+    if (!htmls.length) htmls = [''];
+    if (htmls.length === 1 && !htmls[0].trim()) htmls = ['', '', '', '', ''];
+    return htmls.map((h) => ({ id: uidH('para'), html: h, expanded: true }));
+  }
+
+  function ensurePathwaysBlocks(hike) {
+    if (!hike.pathwaysBlocks || hike.pathwaysDirty) {
+      hike.pathwaysBlocks = deriveBlocksFromHtml(hike.html || '');
+      hike.pathwaysDirty = false;
+    }
+    return hike.pathwaysBlocks;
+  }
+
   function commitPathwaysToHike() {
     const hike = getActiveHike();
-    if (!hike) return;
-    hike.html = readParagraphBoxes().map((box) => markupTextToHtml(box.value)).join('<br><br>');
+    if (!hike || !hike.pathwaysBlocks) return;
+    const boxes = readParagraphBoxes();
+    hike.pathwaysBlocks.forEach((block, idx) => {
+      const box = boxes[idx];
+      if (box) block.html = markupTextToHtml(box.value);
+    });
+    hike.html = joinBlocksToHtml(hike.pathwaysBlocks);
   }
 
   function renderPathwaysMode() {
     const hike = getActiveHike();
     if (!hike) return;
-    const segments = htmlToSegments(hike.html || '');
-    const paragraphs = splitIntoParagraphSegments(segments);
-    if (!paragraphs.length) paragraphs.push([]); // always leave one block to type into
+    renderPathwaysList(ensurePathwaysBlocks(hike));
+  }
+
+  function renderPathwaysList(blocks) {
     hikesPathwaysListEl.innerHTML = '';
-    paragraphs.forEach((paraSegs, idx) => {
-      hikesPathwaysListEl.appendChild(renderParagraphBlock(segmentsToMarkupText(paraSegs), idx, paragraphs.length));
+    blocks.forEach((block, idx) => {
+      hikesPathwaysListEl.appendChild(renderParagraphBlock(block, idx, blocks.length));
     });
   }
 
-  // Re-renders the paragraph boxes directly from a known list of
-  // per-paragraph HTML strings, without re-splitting hike.html on
-  // blank-line boundaries. renderPathwaysMode()'s split is the right
-  // tool the *first* time we carve a Hike's free text into paragraphs
-  // (Editor -> Pathways, or first paint), but re-running it after
-  // add/delete/move/import is lossy: joining an empty paragraph in
-  // with '<br><br>' produces a run of blank lines that, once put back
-  // through the blank-line splitter, can't be told apart from a
-  // shorter run — so an empty paragraph (very common right after
-  // "+ Add paragraph", or before importing into a fresh Hike)
-  // silently disappears instead of appearing. Operating on the
-  // already-known parts list sidesteps that entirely.
-  function renderPathwaysBoxesFromList(parts) {
-    const list = parts.length ? parts : [''];
-    hikesPathwaysListEl.innerHTML = '';
-    list.forEach((html, idx) => {
-      const markupText = segmentsToMarkupText(htmlToSegments(html));
-      hikesPathwaysListEl.appendChild(renderParagraphBlock(markupText, idx, list.length));
-    });
+  function toggleParagraphExpanded(id) {
+    const hike = getActiveHike();
+    if (!hike || !hike.pathwaysBlocks) return;
+    commitPathwaysToHike();
+    const block = hike.pathwaysBlocks.find((b) => b.id === id);
+    if (!block) return;
+    block.expanded = !block.expanded;
+    renderPathwaysList(hike.pathwaysBlocks);
   }
 
-  function renderParagraphBlock(markupText, index, total) {
+  function renderParagraphBlock(block, index, total) {
     const card = document.createElement('div');
-    card.className = 'hikes-paragraph';
+    card.className = 'hikes-paragraph' + (block.expanded ? ' is-expanded' : ' is-collapsed');
+
+    // ---- Accordion header: click to expand/collapse; actions on the right ----
+    const header = document.createElement('div');
+    header.className = 'hikes-paragraph__header';
+
+    const summary = document.createElement('button');
+    summary.type = 'button';
+    summary.className = 'hikes-paragraph__summary';
+    summary.setAttribute('aria-expanded', String(!!block.expanded));
+    summary.addEventListener('click', () => toggleParagraphExpanded(block.id));
+
+    const chevron = document.createElement('span');
+    chevron.className = 'hikes-paragraph__chevron';
+    chevron.textContent = block.expanded ? '\u25be' : '\u25b8';
+    summary.appendChild(chevron);
+
+    const title = document.createElement('span');
+    title.className = 'hikes-paragraph__title';
+    title.textContent = 'Paragraph ' + (index + 1);
+    summary.appendChild(title);
+
+    const preview = document.createElement('span');
+    preview.className = 'hikes-paragraph__preview';
+    const previewText = plainTextFromMarkupText(segmentsToMarkupText(htmlToSegments(block.html))).replace(/\s+/g, ' ').trim();
+    preview.textContent = previewText ? previewText.slice(0, 80) : 'Empty';
+    summary.appendChild(preview);
+
+    header.appendChild(summary);
+
+    const actions = document.createElement('div');
+    actions.className = 'hikes-paragraph__actions';
+
+    const mkAction = (label, titleText, onClick, extraClass) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'hikes-paragraph__action-btn' + (extraClass ? ' ' + extraClass : '');
+      b.innerHTML = label;
+      b.title = titleText;
+      b.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+      return b;
+    };
+
+    const upBtn = mkAction('\u2191', 'Move up', () => moveParagraph(block.id, -1));
+    if (index === 0) upBtn.disabled = true;
+    actions.appendChild(upBtn);
+
+    const downBtn = mkAction('\u2193', 'Move down', () => moveParagraph(block.id, 1));
+    if (index === total - 1) downBtn.disabled = true;
+    actions.appendChild(downBtn);
+
+    actions.appendChild(mkAction('\u2295 Template', 'Fill this paragraph from a template', () => openImportModal(block.id), 'hikes-paragraph__template-btn'));
+
+    actions.appendChild(mkAction('Duplicate', 'Duplicate this paragraph', () => duplicateParagraph(block.id)));
+
+    const delBtn = mkAction('\u2715', 'Delete this paragraph', () => deleteParagraph(block.id), 'hikes-paragraph__delete-btn');
+    if (total <= 1) delBtn.disabled = true;
+    actions.appendChild(delBtn);
+
+    header.appendChild(actions);
+    card.appendChild(header);
+
+    // ---- Body: the same formatting toolbar + textarea as the Hikes editor ----
+    const body = document.createElement('div');
+    body.className = 'hikes-paragraph__body';
+    body.hidden = !block.expanded;
 
     const toolbar = document.createElement('div');
     toolbar.className = 'hikes-paragraph__toolbar';
@@ -2397,15 +2489,15 @@
     box.className = 'draft-textarea draft-template-expand__input hikes-paragraph__box';
     box.setAttribute('aria-label', 'Paragraph ' + (index + 1) + ' of ' + total);
     box.setAttribute('placeholder', 'Write this paragraph…');
-    box.value = markupText;
-    box.addEventListener('input', commitPathwaysToHike);
+    box.value = segmentsToMarkupText(htmlToSegments(block.html));
+    box.addEventListener('input', () => { commitPathwaysToHike(); preview.textContent = (plainTextFromMarkupText(box.value).replace(/\s+/g, ' ').trim().slice(0, 80)) || 'Empty'; });
 
-    const mk = (label, title, onClick) => {
+    const mk = (label, titleText, onClick) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'summit-btn';
       b.innerHTML = label;
-      b.title = title;
+      b.title = titleText;
       b.addEventListener('mousedown', (e) => e.preventDefault()); // keep focus/selection in box
       b.addEventListener('click', onClick);
       return b;
@@ -2418,46 +2510,21 @@
     toolbar.appendChild(mk('1.', 'Toggle numbering on this line', () => toggleTextareaLinePrefix(box, 'number')));
     toolbar.appendChild(mk('Link', 'Insert a link at the cursor', () => insertLinkInTextarea(box)));
 
-    const spacer = document.createElement('span');
-    spacer.className = 'hikes-paragraph__toolbar-spacer';
-    toolbar.appendChild(spacer);
+    body.appendChild(toolbar);
+    body.appendChild(box);
+    card.appendChild(body);
 
-    const indexLabel = document.createElement('span');
-    indexLabel.className = 'hikes-paragraph__index';
-    indexLabel.textContent = (index + 1) + ' / ' + total;
-    toolbar.appendChild(indexLabel);
-
-    const upBtn = mk('\u2191', 'Move up', () => moveParagraph(index, -1));
-    upBtn.className += ' hikes-paragraph__move-btn';
-    if (index === 0) upBtn.disabled = true;
-    toolbar.appendChild(upBtn);
-
-    const downBtn = mk('\u2193', 'Move down', () => moveParagraph(index, 1));
-    downBtn.className += ' hikes-paragraph__move-btn';
-    if (index === total - 1) downBtn.disabled = true;
-    toolbar.appendChild(downBtn);
-
-    const delBtn = mk('\u2715', 'Delete this paragraph', () => deleteParagraph(index));
-    delBtn.className += ' hikes-paragraph__delete-btn';
-    if (total <= 1) delBtn.disabled = true;
-    toolbar.appendChild(delBtn);
-
-    card.appendChild(toolbar);
-    card.appendChild(box);
     return card;
-  }
-
-  function currentParagraphHtmlList() {
-    return readParagraphBoxes().map((box) => markupTextToHtml(box.value));
   }
 
   function addParagraph() {
     const hike = getActiveHike();
     if (!hike) return;
-    const parts = currentParagraphHtmlList();
-    parts.push('');
-    hike.html = parts.join('<br><br>');
-    renderPathwaysBoxesFromList(parts);
+    commitPathwaysToHike();
+    const blocks = ensurePathwaysBlocks(hike);
+    blocks.push({ id: uidH('para'), html: '', expanded: true });
+    hike.html = joinBlocksToHtml(blocks);
+    renderPathwaysList(blocks);
     requestAnimationFrame(() => {
       const boxes = readParagraphBoxes();
       const last = boxes[boxes.length - 1];
@@ -2465,35 +2532,62 @@
     });
   }
 
-  function deleteParagraph(index) {
+  function duplicateParagraph(id) {
     const hike = getActiveHike();
-    if (!hike) return;
-    const parts = currentParagraphHtmlList();
-    if (parts.length <= 1) return;
-    parts.splice(index, 1);
-    hike.html = parts.join('<br><br>');
-    renderPathwaysBoxesFromList(parts);
+    if (!hike || !hike.pathwaysBlocks) return;
+    commitPathwaysToHike();
+    const blocks = hike.pathwaysBlocks;
+    const idx = blocks.findIndex((b) => b.id === id);
+    if (idx === -1) return;
+    blocks.splice(idx + 1, 0, { id: uidH('para'), html: blocks[idx].html, expanded: true });
+    hike.html = joinBlocksToHtml(blocks);
+    renderPathwaysList(blocks);
   }
 
-  function moveParagraph(index, delta) {
+  function fillParagraphFromTemplate(id, html) {
     const hike = getActiveHike();
-    if (!hike) return;
-    const parts = currentParagraphHtmlList();
-    const target = index + delta;
-    if (target < 0 || target >= parts.length) return;
-    const [item] = parts.splice(index, 1);
-    parts.splice(target, 0, item);
-    hike.html = parts.join('<br><br>');
-    renderPathwaysBoxesFromList(parts);
+    if (!hike || !hike.pathwaysBlocks) return;
+    commitPathwaysToHike();
+    const block = hike.pathwaysBlocks.find((b) => b.id === id);
+    if (!block) return;
+    block.html = html;
+    block.expanded = true;
+    hike.html = joinBlocksToHtml(hike.pathwaysBlocks);
+    renderPathwaysList(hike.pathwaysBlocks);
+  }
+
+  function deleteParagraph(id) {
+    const hike = getActiveHike();
+    if (!hike || !hike.pathwaysBlocks) return;
+    commitPathwaysToHike();
+    if (hike.pathwaysBlocks.length <= 1) return;
+    hike.pathwaysBlocks = hike.pathwaysBlocks.filter((b) => b.id !== id);
+    hike.html = joinBlocksToHtml(hike.pathwaysBlocks);
+    renderPathwaysList(hike.pathwaysBlocks);
+  }
+
+  function moveParagraph(id, delta) {
+    const hike = getActiveHike();
+    if (!hike || !hike.pathwaysBlocks) return;
+    commitPathwaysToHike();
+    const blocks = hike.pathwaysBlocks;
+    const idx = blocks.findIndex((b) => b.id === id);
+    const target = idx + delta;
+    if (idx === -1 || target < 0 || target >= blocks.length) return;
+    const [item] = blocks.splice(idx, 1);
+    blocks.splice(target, 0, item);
+    hike.html = joinBlocksToHtml(blocks);
+    renderPathwaysList(blocks);
   }
 
   function insertImportedParagraph(html) {
     const hike = getActiveHike();
     if (!hike) return;
-    const parts = currentParagraphHtmlList();
-    parts.push(html);
-    hike.html = parts.join('<br><br>');
-    renderPathwaysBoxesFromList(parts);
+    commitPathwaysToHike();
+    const blocks = ensurePathwaysBlocks(hike);
+    blocks.push({ id: uidH('para'), html: html, expanded: true });
+    hike.html = joinBlocksToHtml(blocks);
+    renderPathwaysList(blocks);
   }
 
   hikesAddParagraphBtn.addEventListener('click', addParagraph);
@@ -2541,10 +2635,13 @@
   // ============================================================
 
   const importModal = document.getElementById('hikes-import-modal');
+  const importTitleEl = document.getElementById('hikes-import-title');
   const importQueryInput = document.getElementById('hikes-import-query');
   const importSubFilterSel = document.getElementById('hikes-import-subfilter');
   const importResultsEl = document.getElementById('hikes-import-results');
   const importCountEl = document.getElementById('hikes-import-count');
+
+  let importTargetBlockId = null; // set when opened from a paragraph's own "⊕ Template" button
 
   function populateImportSubFilter() {
     const current = importSubFilterSel.value;
@@ -2577,10 +2674,16 @@
     const insertBtn = document.createElement('button');
     insertBtn.type = 'button';
     insertBtn.className = 'summit-btn summit-btn--primary';
-    insertBtn.textContent = 'Insert';
+    insertBtn.textContent = importTargetBlockId ? 'Use for this paragraph' : 'Insert as new paragraph';
     insertBtn.addEventListener('click', () => {
-      insertImportedParagraph(p.html);
-      showHikesToast('Paragraph inserted');
+      if (importTargetBlockId) {
+        fillParagraphFromTemplate(importTargetBlockId, p.html);
+        showHikesToast('Paragraph filled from template');
+        closeImportModal();
+      } else {
+        insertImportedParagraph(p.html);
+        showHikesToast('Paragraph inserted');
+      }
     });
     card.appendChild(insertBtn);
 
@@ -2608,8 +2711,22 @@
     shown.forEach((p) => importResultsEl.appendChild(renderImportResult(p)));
   }
 
-  function openImportModal() {
+  // targetId: pass a paragraph's block id to fill that specific
+  // paragraph (from its own "⊕ Template" button); omit/pass nothing
+  // to fall back to the footer's "Import from template…", which adds
+  // the picked paragraph as a new block at the end instead.
+  function openImportModal(targetId) {
     if (!importModal) return;
+    importTargetBlockId = targetId || null;
+    if (importTitleEl) {
+      const hike = getActiveHike();
+      const idx = importTargetBlockId && hike && hike.pathwaysBlocks
+        ? hike.pathwaysBlocks.findIndex((b) => b.id === importTargetBlockId)
+        : -1;
+      importTitleEl.textContent = idx > -1
+        ? 'Fill Paragraph ' + (idx + 1) + ' from a template'
+        : 'Import a paragraph from a template';
+    }
     populateImportSubFilter();
     importQueryInput.value = '';
     importModal.hidden = false;
@@ -2621,13 +2738,14 @@
     if (!importModal) return;
     importModal.hidden = true;
     importModal.setAttribute('aria-hidden', 'true');
+    importTargetBlockId = null;
   }
   if (importModal) {
     importModal.querySelectorAll('[data-hikes-import-close]').forEach((el) => el.addEventListener('click', closeImportModal));
   }
   importQueryInput.addEventListener('input', renderImportResults);
   importSubFilterSel.addEventListener('change', renderImportResults);
-  hikesImportParagraphBtn.addEventListener('click', openImportModal);
+  hikesImportParagraphBtn.addEventListener('click', () => openImportModal(null));
 
   // ---------- Initial paint ----------
   renderHikesList();
