@@ -1275,15 +1275,8 @@
     const isSoftParagraph = (el) => {
       if (!el || el.nodeType !== 1 || (el.tagName !== 'P' && el.tagName !== 'DIV')) return false;
       const style = el.getAttribute('style') || '';
-      // mso-margin-*-alt:auto is the specific signal Word emits for its
-      // "no space between paragraphs of the same style" setting — the
-      // one case that genuinely looks like a wrapped/continued line.
-      // The MsoNormal *class* alone used to be treated as a second
-      // signal, but Word stamps that class on virtually every body
-      // paragraph regardless of spacing, so it was merging real,
-      // distinct paragraphs into one run joined by a single space —
-      // collapsing an entire pasted document into one block of text.
-      return /mso-margin-(top|bottom)-alt/i.test(style);
+      const cls = el.getAttribute('class') || '';
+      return /mso-margin-(top|bottom)-alt/i.test(style) || /\bMsoNormal\b/i.test(cls);
     };
 
     function mergeRun(container) {
@@ -1399,19 +1392,7 @@
 
   function cleanNode(node) {
     Array.from(node.childNodes).forEach((child) => {
-      if (child.nodeType === Node.TEXT_NODE) {
-        // HTML collapses runs of whitespace (including literal
-        // newlines/tabs in the source markup) to a single space when
-        // rendered. We're working on a detached, unrendered document,
-        // so that collapsing never happens automatically — Word and
-        // Outlook in particular hand-wrap their clipboard HTML source
-        // at a fixed column width, and without this those source-only
-        // line breaks would show up as real line breaks mid-sentence
-        // once pasted. \u00a0 (nbsp) is deliberately left alone since
-        // it's an intentional space, not source formatting.
-        child.textContent = child.textContent.replace(/[ \t\n\r\f]+/g, ' ');
-        return;
-      }
+      if (child.nodeType === Node.TEXT_NODE) return;
       if (child.nodeType !== Node.ELEMENT_NODE) { node.removeChild(child); return; }
 
       if (STRIP_ENTIRELY.has(child.tagName)) {
