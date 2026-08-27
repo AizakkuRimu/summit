@@ -4210,6 +4210,7 @@
   // rest of the app already does (br -> \n, block-level -> \n).
   function plainTextFromElement(el) {
     const clone = el.cloneNode(true);
+    Array.from(clone.querySelectorAll('br[data-caret-filler]')).forEach((br) => br.remove());
     Array.from(clone.querySelectorAll('br')).forEach((br) => br.replaceWith('\n'));
     Array.from(clone.querySelectorAll('div, p')).forEach((elx) => elx.insertAdjacentText('afterend', '\n'));
     return (clone.textContent || '')
@@ -4236,8 +4237,34 @@
   }
   function editorLinks() { return linksFromElement(templateInput); }
 
+  // True if `node` is the very last piece of content in `el` — i.e.
+  // there's nothing, at any level, after it before el's closing tag.
+  function isTrailingInEditor(node, el) {
+    let n = node;
+    while (n && n !== el) {
+      if (n.nextSibling) return false;
+      n = n.parentNode;
+    }
+    return true;
+  }
+
+  // A <br> that lands as the last node in a contenteditable has no
+  // visible effect on its own — browsers only draw the new empty
+  // line once a second line-break (or other content) follows it.
+  // Without this, pressing Enter at the end of the box moves the
+  // caret (Selection-wise) down a line but nothing on screen shows
+  // it moved. We insert a marked placeholder <br> to force that
+  // empty line to render, and clean it up again once it's no longer
+  // trailing (see wireRichTextEditing's 'input' listener) or before
+  // the content is read/saved (see sanitizeElementHtml/plainTextFromElement).
+  function stripCaretFiller(el) {
+    const filler = el.querySelector('br[data-caret-filler]');
+    if (filler) filler.remove();
+  }
+
   function insertNodeInto(el, node) {
     el.focus();
+    stripCaretFiller(el);
     const sel = window.getSelection();
     let range;
     if (sel && sel.rangeCount && el.contains(sel.anchorNode)) {
@@ -4255,6 +4282,11 @@
     const isFragment = node.nodeType === 11;
     const anchor = isFragment ? node.lastChild : node;
     range.insertNode(node);
+    if (anchor && anchor.nodeType === 1 && anchor.tagName === 'BR' && isTrailingInEditor(anchor, el)) {
+      const filler = document.createElement('br');
+      filler.setAttribute('data-caret-filler', '');
+      anchor.parentNode.insertBefore(filler, anchor.nextSibling);
+    }
     if (anchor && anchor.parentNode) {
       range.setStartAfter(anchor);
       range.collapse(true);
@@ -4365,7 +4397,7 @@
         if (child.nodeType === 3) return;
         if (child.nodeType !== 1) { child.remove(); return; }
         let tag = child.tagName;
-        if (tag === 'BR') return;
+        if (tag === 'BR') { if (child.hasAttribute('data-caret-filler')) child.remove(); return; }
         if (tag === 'A') {
           const href = (child.getAttribute('href') || '').trim();
           Array.from(child.attributes).forEach((attr) => child.removeAttribute(attr.name));
@@ -4595,6 +4627,13 @@
       e.preventDefault();
       insertNodeInto(el, document.createElement('br'));
     });
+
+    // Once real typing (or any other native edit) lands after the
+    // caret-filler <br> from a previous Enter, that line already has
+    // visible content/height on its own and the filler is no longer
+    // needed — remove it so it doesn't turn into a stray extra blank
+    // line when the content is read or saved.
+    el.addEventListener('input', () => stripCaretFiller(el));
   }
   wireRichTextEditing(templateInput);
 

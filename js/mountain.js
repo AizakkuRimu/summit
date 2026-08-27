@@ -1877,14 +1877,6 @@
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  function renameEl(el, tagName) {
-    if (el.tagName.toLowerCase() === tagName) return el;
-    const repl = el.ownerDocument.createElement(tagName);
-    while (el.firstChild) repl.appendChild(el.firstChild);
-    el.replaceWith(repl);
-    return repl;
-  }
-
   // Parses a segment list back out of stored HTML — same shape Draft
   // uses: [{ type: 'text', value, bold, italic, underline } | { type:
   // 'link', text, url, bold, italic, underline }], with '\n' text
@@ -1954,7 +1946,12 @@
         while (p.length && p[p.length - 1].type === 'text' && p[p.length - 1].value === '\n') p.pop();
         return p;
       })
-      .filter((p) => p.some((s) => s.type === 'link' || (s.value && s.value.trim())));
+      // Drop genuinely-empty paragraphs — except the last one, which is
+      // kept even when blank. Otherwise a just-added "Add Paragraph"
+      // block (pushed as an empty '' segment) gets parsed right back
+      // out again the moment renderPathwaysMode() re-splits hike.html,
+      // so the new empty box a user expects to type into never appears.
+      .filter((p, i, arr) => i === arr.length - 1 || p.some((s) => s.type === 'link' || (s.value && s.value.trim())));
   }
 
   // Clipboard-only rendering: one <div> per line so a bulleted list
@@ -1973,245 +1970,202 @@
       : '<div><br></div>').join('');
   }
 
-  function plainTextFromElement(el) {
-    const clone = el.cloneNode(true);
-    Array.from(clone.querySelectorAll('br')).forEach((br) => br.replaceWith('\n'));
-    Array.from(clone.querySelectorAll('div, p')).forEach((elx) => elx.insertAdjacentText('afterend', '\n'));
-    return (clone.textContent || '')
-      .replace(/\n{3,}/g, '\n\n')
-      .replace(/^\n+|\n+$/g, '');
+  // ============================================================
+  // Plain-text editing kernel — marker-based textarea editing,
+  // ported from Draft's "Expand to edit" modal (draft.js) so the
+  // Hikes editor is a genuine plain <textarea>: fully native,
+  // predictable arrow-key/Backspace/Enter/selection behaviour, no
+  // contenteditable Range/caret involved at all. Formatting shows
+  // as literal ⟦B⟧/⟦/B⟧, ⟦I⟧/⟦/I⟧, ⟦U⟧/⟦/U⟧, ⟦L:url⟧/⟦/L⟧ bracket
+  // markers (U+27E6/27E7 — nothing anyone would type in normal
+  // text, so round-tripping through them is unambiguous). hike.html
+  // stays the on-disk/copy-out model exactly as before; these
+  // functions just convert it to/from that marker text for display.
+  // ============================================================
+
+  // Segment list (from htmlToSegments) -> marker plain text.
+  function segmentsToMarkupText(segments) {
+    return segments.map((seg) => {
+      let core = seg.type === 'link'
+        ? '\u27e6L:' + seg.url + '\u27e7' + seg.text + '\u27e6/L\u27e7'
+        : seg.value;
+      if (seg.bold) core = '\u27e6B\u27e7' + core + '\u27e6/B\u27e7';
+      if (seg.italic) core = '\u27e6I\u27e7' + core + '\u27e6/I\u27e7';
+      if (seg.underline) core = '\u27e6U\u27e7' + core + '\u27e6/U\u27e7';
+      return core;
+    }).join('');
   }
 
-  function insertNodeInto(el, node) {
-    el.focus();
-    const sel = window.getSelection();
-    let range;
-    if (sel && sel.rangeCount && el.contains(sel.anchorNode)) {
-      range = sel.getRangeAt(0);
-      range.deleteContents();
-    } else {
-      range = document.createRange();
-      range.selectNodeContents(el);
-      range.collapse(false);
-    }
-    const isFragment = node.nodeType === 11;
-    const anchor = isFragment ? node.lastChild : node;
-    range.insertNode(node);
-    if (anchor && anchor.parentNode) {
-      range.setStartAfter(anchor);
-      range.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }
-  }
-
-  // Sanitizes an editor's live content down to text + <br> + <a href>
-  // + <b> + <i> + <u> before it's stored, same whitelist Draft uses.
-  function sanitizeElementHtml(el) {
-    const clone = el.cloneNode(true);
-    (function clean(node) {
-      Array.from(node.childNodes).forEach((child) => {
-        if (child.nodeType === 3) return;
-        if (child.nodeType !== 1) { child.remove(); return; }
-        let tag = child.tagName;
-        if (tag === 'BR') return;
-        if (tag === 'A') {
-          const href = (child.getAttribute('href') || '').trim();
-          Array.from(child.attributes).forEach((attr) => child.removeAttribute(attr.name));
-          if (href) {
-            child.setAttribute('href', href);
-            child.setAttribute('target', '_blank');
-            child.setAttribute('rel', 'noopener');
-            clean(child);
-          } else {
-            while (child.firstChild) child.parentNode.insertBefore(child.firstChild, child);
-            child.remove();
+  // Marker plain text -> a { type, ... }[] node tree (text / wrap /
+  // link nodes, wrap/link nodes carrying their own children so B
+  // inside a link or a link inside B both round-trip). Malformed or
+  // stray markers (an unmatched ⟦B⟧ with no closing tag, say) fall
+  // back to being kept as literal text rather than silently
+  // dropping content.
+  function parseMarkupText(text) {
+    let i = 0;
+    const n = text.length;
+    function parseUntil(closeTag) {
+      const nodes = [];
+      let buf = '';
+      const flush = () => { if (buf) { nodes.push({ type: 'text', value: buf }); buf = ''; } };
+      while (i < n) {
+        if (text[i] === '\u27e6') {
+          const closeIdx = text.indexOf('\u27e7', i);
+          if (closeIdx === -1) { buf += text[i]; i += 1; continue; }
+          const tagContent = text.slice(i + 1, closeIdx);
+          if (tagContent.charAt(0) === '/') {
+            const tagName = tagContent.slice(1);
+            if (closeTag && tagName === closeTag) {
+              flush();
+              i = closeIdx + 1;
+              return nodes;
+            }
+            buf += text.slice(i, closeIdx + 1);
+            i = closeIdx + 1;
+            continue;
           }
-          return;
+          if (tagContent === 'B' || tagContent === 'I' || tagContent === 'U') {
+            flush();
+            i = closeIdx + 1;
+            nodes.push({ type: 'wrap', tag: tagContent, children: parseUntil(tagContent) });
+            continue;
+          }
+          if (tagContent.slice(0, 2) === 'L:') {
+            flush();
+            const url = tagContent.slice(2);
+            i = closeIdx + 1;
+            nodes.push({ type: 'link', url, children: parseUntil('L') });
+            continue;
+          }
+          buf += text.slice(i, closeIdx + 1);
+          i = closeIdx + 1;
+          continue;
         }
-        if (tag === 'STRONG') child = renameEl(child, 'b');
-        else if (tag === 'EM') child = renameEl(child, 'i');
-        if (child.tagName === 'B' || child.tagName === 'I' || child.tagName === 'U') {
-          Array.from(child.attributes).forEach((attr) => child.removeAttribute(attr.name));
-          clean(child);
-          return;
-        }
-        clean(child);
-        while (child.firstChild) child.parentNode.insertBefore(child.firstChild, child);
-        child.remove();
-      });
-    }(clone));
-    return clone.innerHTML;
+        buf += text[i];
+        i += 1;
+      }
+      flush();
+      return nodes;
+    }
+    return parseUntil(null);
   }
 
-  // Simplified counterpart to draft.js's htmlToTemplateFragment: same
-  // whitelist and same li->bullet/number-prefix conversion, but
-  // without draft.js's Word-specific mso-paragraph-merge heuristics —
-  // pasted Word content still comes in clean, just occasionally one
-  // line-wrap short of draft.js's more elaborate cleanup.
-  function htmlToFlatFragment(html) {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    const blockSelector = 'p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote';
-
-    Array.from(doc.body.querySelectorAll('strong, b')).forEach((el) => renameEl(el, 'b'));
-    Array.from(doc.body.querySelectorAll('em, i')).forEach((el) => renameEl(el, 'i'));
-
-    Array.from(doc.body.querySelectorAll('a[href]')).forEach((a) => {
-      const href = (a.getAttribute('href') || '').trim();
-      const label = a.textContent.trim();
-      if (!href || !label) { a.replaceWith(document.createTextNode(label)); return; }
-      const clean = document.createElement('a');
-      clean.setAttribute('href', href);
-      clean.setAttribute('target', '_blank');
-      clean.setAttribute('rel', 'noopener');
-      clean.textContent = label;
-      a.replaceWith(clean);
-    });
-
-    Array.from(doc.body.querySelectorAll('li')).forEach((li) => {
-      const ordered = li.parentElement && li.parentElement.tagName === 'OL';
-      let marker = '\u2022 ';
-      if (ordered) {
-        const siblings = Array.from(li.parentElement.children).filter((c) => c.tagName === 'LI');
-        marker = (siblings.indexOf(li) + 1) + '. ';
+  function appendMarkupNodes(el, nodes) {
+    nodes.forEach((node) => {
+      if (node.type === 'text') {
+        const lines = node.value.split('\n');
+        lines.forEach((line, idx) => {
+          if (line) el.appendChild(document.createTextNode(line));
+          if (idx < lines.length - 1) el.appendChild(document.createElement('br'));
+        });
+      } else if (node.type === 'wrap') {
+        const wrapEl = document.createElement(node.tag.toLowerCase());
+        appendMarkupNodes(wrapEl, node.children);
+        el.appendChild(wrapEl);
+      } else if (node.type === 'link') {
+        const a = document.createElement('a');
+        a.setAttribute('href', node.url);
+        a.setAttribute('target', '_blank');
+        a.setAttribute('rel', 'noopener');
+        // Link text is flat in this app's model (see htmlToSegments)
+        // — plain-text the children rather than nesting further tags.
+        a.textContent = node.children.map((c) => (c.type === 'text' ? c.value : (c.text || ''))).join('');
+        el.appendChild(a);
       }
-      li.insertBefore(document.createTextNode(marker), li.firstChild);
     });
+  }
 
-    Array.from(doc.body.querySelectorAll(blockSelector)).forEach((el) => {
-      el.insertAdjacentHTML('afterend', '<br>');
-    });
+  // Marker plain text -> the same text + <br> + <a>/<b>/<i>/<u> HTML
+  // hike.html has always stored, ready to save straight to state.
+  function markupTextToHtml(text) {
+    const nodes = parseMarkupText(text);
+    const container = document.createElement('div');
+    appendMarkupNodes(container, nodes);
+    return container.innerHTML;
+  }
 
-    const KEEP_TAGS = new Set(['A', 'BR', 'B', 'I', 'U']);
-    (function unwrap(node) {
-      Array.from(node.children).forEach((child) => {
-        unwrap(child);
-        if (!KEEP_TAGS.has(child.tagName)) {
-          while (child.firstChild) child.parentNode.insertBefore(child.firstChild, child);
-          child.remove();
-        }
-      });
-    }(doc.body));
-
-    const frag = document.createDocumentFragment();
-    Array.from(doc.body.childNodes).forEach((n) => frag.appendChild(n.cloneNode(true)));
-    return frag;
+  // Marker plain text -> plain reading text (markers/URLs stripped,
+  // link labels kept) — the plain-text half of "Copy out".
+  function plainTextFromMarkupText(text) {
+    function walk(nodes) {
+      return nodes.map((node) => (node.type === 'text' ? node.value : walk(node.children))).join('');
+    }
+    return walk(parseMarkupText(text));
   }
 
   // ---------- Bullet / numbered lines (identical to draft.js) ----------
   const BULLET_PREFIX = '\u2022 ';
   const NUMBER_PREFIX_RE = /^\d+\.\s/;
   const BULLET_PREFIX_RE = /^\u2022 /;
-  const SUPPORTS_SELECTION_MODIFY = typeof window.getSelection === 'function' &&
-    typeof Selection !== 'undefined' && typeof Selection.prototype.modify === 'function';
 
-  function collapseToLineStart(el) {
-    const sel = window.getSelection();
-    if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) return null;
-    const collapsed = sel.getRangeAt(0).cloneRange();
-    collapsed.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(collapsed);
-    sel.modify('move', 'backward', 'lineboundary');
-    return sel;
+  // Wraps (or, with nothing selected, inserts a placeholder inside)
+  // the current textarea selection in marker tags — plain
+  // setRangeText-based string editing (same API Draft's expand
+  // modal uses), so it's immune to any contenteditable Range/caret
+  // quirks and arrow keys/Backspace/selection stay 100% native.
+  function wrapSelectionInTextarea(textarea, openTag, closeTag, placeholder) {
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const value = textarea.value;
+    const selected = value.slice(start, end) || placeholder;
+    const replacement = openTag + selected + closeTag;
+    textarea.setRangeText(replacement, start, end, 'select');
+    textarea.focus();
+    // Select just the inner text (not the markers) so typing over a
+    // placeholder or existing selection replaces the right thing.
+    textarea.setSelectionRange(start + openTag.length, start + openTag.length + selected.length);
   }
 
-  function lineTextAndRecollapse(sel) {
-    const atStart = sel.getRangeAt(0).cloneRange();
-    sel.modify('extend', 'forward', 'lineboundary');
-    const text = sel.getRangeAt(0).toString();
-    const restore = atStart.cloneRange();
-    restore.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(restore);
-    return text;
-  }
+  // Same literal "\u2022 "/"N. " prefix as Draft's expand modal —
+  // plain string splicing on the textarea's own line, since there's
+  // no DOM selection to manage in a <textarea>.
+  function toggleTextareaLinePrefix(textarea, kind) {
+    const value = textarea.value;
+    const caret = textarea.selectionStart;
+    const lineStart = value.lastIndexOf('\n', caret - 1) + 1;
+    let lineEnd = value.indexOf('\n', caret);
+    if (lineEnd === -1) lineEnd = value.length;
+    const line = value.slice(lineStart, lineEnd);
 
-  function previousLineText(originalCollapsed) {
-    const sel = window.getSelection();
-    sel.modify('move', 'backward', 'character');
-    sel.modify('move', 'backward', 'lineboundary');
-    sel.modify('extend', 'forward', 'lineboundary');
-    const text = sel.getRangeAt(0).toString();
-    const restore = originalCollapsed.cloneRange();
-    restore.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(restore);
-    return text;
-  }
-
-  function nextNumberPrefix(sel) {
-    const originalCollapsed = sel.getRangeAt(0).cloneRange();
-    const prevText = previousLineText(originalCollapsed);
-    const m = NUMBER_PREFIX_RE.exec(prevText);
-    const n = m ? parseInt(m[0], 10) + 1 : 1;
-    return n + '. ';
-  }
-
-  function toggleLinePrefix(el, kind) {
-    el.focus();
-    if (!SUPPORTS_SELECTION_MODIFY) return;
-    const sel = collapseToLineStart(el);
-    if (!sel) return;
-    const lineText = lineTextAndRecollapse(sel);
-    const hasBullet = BULLET_PREFIX_RE.test(lineText);
-    const numberMatch = NUMBER_PREFIX_RE.exec(lineText);
-    const existingLen = hasBullet ? BULLET_PREFIX.length : (numberMatch ? numberMatch[0].length : 0);
-
-    if (existingLen > 0) {
-      for (let i = 0; i < existingLen; i++) sel.modify('extend', 'forward', 'character');
-      document.execCommand('delete');
-    }
+    const hasBullet = BULLET_PREFIX_RE.test(line);
+    const numberMatch = NUMBER_PREFIX_RE.exec(line);
+    const rest = hasBullet ? line.slice(BULLET_PREFIX.length) : (numberMatch ? line.slice(numberMatch[0].length) : line);
 
     const togglingOffSameKind = (kind === 'bullet' && hasBullet) || (kind === 'number' && !!numberMatch);
-    if (togglingOffSameKind) return;
+    let newLine;
+    if (togglingOffSameKind) {
+      newLine = rest;
+    } else if (kind === 'bullet') {
+      newLine = BULLET_PREFIX + rest;
+    } else {
+      const prevLineEnd = lineStart > 0 ? lineStart - 1 : -1;
+      const prevLineStart = prevLineEnd >= 0 ? value.lastIndexOf('\n', prevLineEnd - 1) + 1 : 0;
+      const prevLine = prevLineEnd >= 0 ? value.slice(prevLineStart, prevLineEnd) : '';
+      const prevMatch = NUMBER_PREFIX_RE.exec(prevLine);
+      const n = prevMatch ? parseInt(prevMatch[0], 10) + 1 : 1;
+      newLine = n + '. ' + rest;
+    }
 
-    const prefix = kind === 'bullet' ? BULLET_PREFIX : nextNumberPrefix(sel);
-    document.execCommand('insertText', false, prefix);
+    textarea.setRangeText(newLine, lineStart, lineEnd, 'preserve');
+    textarea.focus();
   }
 
-  function wireRichTextEditing(el) {
-    el.addEventListener('paste', (e) => {
-      const cd = e.clipboardData || window.clipboardData;
-      if (!cd) return;
-      const html = cd.getData('text/html');
-      if (!html) return;
-      e.preventDefault();
-      const frag = htmlToFlatFragment(html);
-      insertNodeInto(el, frag);
-    });
-
-    el.addEventListener('keydown', (e) => {
-      const mod = e.ctrlKey || e.metaKey;
-      if (mod && !e.shiftKey && !e.altKey && (e.key === 'b' || e.key === 'B')) {
-        e.preventDefault(); document.execCommand('bold'); return;
-      }
-      if (mod && !e.shiftKey && !e.altKey && (e.key === 'i' || e.key === 'I')) {
-        e.preventDefault(); document.execCommand('italic'); return;
-      }
-      if (mod && !e.shiftKey && !e.altKey && (e.key === 'u' || e.key === 'U')) {
-        e.preventDefault(); document.execCommand('underline'); return;
-      }
-      if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
-      e.preventDefault();
-      insertNodeInto(el, document.createElement('br'));
-    });
-  }
-
-  function insertLinkInto(el) {
-    const sel = window.getSelection();
-    const selectedText = (sel && sel.rangeCount && el.contains(sel.anchorNode)) ? sel.toString() : '';
+  // Prompts for a URL/label and inserts a ⟦L:url⟧label⟦/L⟧ marker
+  // at the current selection — the textarea equivalent of the old
+  // contenteditable insertLinkInto.
+  function insertLinkInTextarea(textarea) {
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selected = textarea.value.slice(start, end);
     const url = window.prompt('Link URL:');
     if (!url || !url.trim()) return false;
-    const label = window.prompt('Link text (leave blank to show the URL itself):', selectedText || '');
     const trimmedUrl = url.trim();
+    const label = window.prompt('Link text (leave blank to show the URL itself):', selected || '');
     const trimmedLabel = (label || '').trim() || trimmedUrl;
-    const a = document.createElement('a');
-    a.setAttribute('href', trimmedUrl);
-    a.setAttribute('target', '_blank');
-    a.setAttribute('rel', 'noopener');
-    a.textContent = trimmedLabel;
-    insertNodeInto(el, a);
+    const replacement = '\u27e6L:' + trimmedUrl + '\u27e7' + trimmedLabel + '\u27e6/L\u27e7';
+    textarea.setRangeText(replacement, start, end, 'end');
+    textarea.focus();
     return true;
   }
 
@@ -2343,8 +2297,10 @@
   });
 
   // ============================================================
-  // Editor mode — single continuous rich-text box, exactly Draft's
-  // template editor.
+  // Editor mode — a single plain <textarea> showing bracket markers,
+  // exactly Draft's "Expand to edit" template editor. No
+  // contenteditable involved: arrow keys, Backspace, Home/End,
+  // selection, etc. are entirely native <textarea> behaviour.
   // ============================================================
 
   function setMode(next) {
@@ -2361,23 +2317,22 @@
   function renderEditorMode() {
     const hike = getActiveHike();
     if (!hike) return;
-    hikesEditorBox.innerHTML = hike.html || '';
+    hikesEditorBox.value = segmentsToMarkupText(htmlToSegments(hike.html || ''));
   }
 
   function commitEditorMode() {
     const hike = getActiveHike();
     if (!hike) return;
-    hike.html = sanitizeElementHtml(hikesEditorBox);
+    hike.html = markupTextToHtml(hikesEditorBox.value);
   }
 
-  wireRichTextEditing(hikesEditorBox);
   hikesEditorBox.addEventListener('input', commitEditorMode);
-  hikesBoldBtn.addEventListener('click', () => { hikesEditorBox.focus(); document.execCommand('bold'); });
-  hikesItalicBtn.addEventListener('click', () => { hikesEditorBox.focus(); document.execCommand('italic'); });
-  hikesUnderlineBtn.addEventListener('click', () => { hikesEditorBox.focus(); document.execCommand('underline'); });
-  hikesBulletBtn.addEventListener('click', () => { toggleLinePrefix(hikesEditorBox, 'bullet'); commitEditorMode(); });
-  hikesNumberBtn.addEventListener('click', () => { toggleLinePrefix(hikesEditorBox, 'number'); commitEditorMode(); });
-  hikesLinkBtn.addEventListener('click', () => { if (insertLinkInto(hikesEditorBox)) commitEditorMode(); });
+  hikesBoldBtn.addEventListener('click', () => wrapSelectionInTextarea(hikesEditorBox, '\u27e6B\u27e7', '\u27e6/B\u27e7', 'bold text'));
+  hikesItalicBtn.addEventListener('click', () => wrapSelectionInTextarea(hikesEditorBox, '\u27e6I\u27e7', '\u27e6/I\u27e7', 'italic text'));
+  hikesUnderlineBtn.addEventListener('click', () => wrapSelectionInTextarea(hikesEditorBox, '\u27e6U\u27e7', '\u27e6/U\u27e7', 'underlined text'));
+  hikesBulletBtn.addEventListener('click', () => toggleTextareaLinePrefix(hikesEditorBox, 'bullet'));
+  hikesNumberBtn.addEventListener('click', () => toggleTextareaLinePrefix(hikesEditorBox, 'number'));
+  hikesLinkBtn.addEventListener('click', () => insertLinkInTextarea(hikesEditorBox));
 
   // ============================================================
   // Pathways mode — the same Hike's text as separate, reorderable
@@ -2395,7 +2350,7 @@
   function commitPathwaysToHike() {
     const hike = getActiveHike();
     if (!hike) return;
-    hike.html = readParagraphBoxes().map((box) => sanitizeElementHtml(box)).join('<br><br>');
+    hike.html = readParagraphBoxes().map((box) => markupTextToHtml(box.value)).join('<br><br>');
   }
 
   function renderPathwaysMode() {
@@ -2406,26 +2361,22 @@
     if (!paragraphs.length) paragraphs.push([]); // always leave one block to type into
     hikesPathwaysListEl.innerHTML = '';
     paragraphs.forEach((paraSegs, idx) => {
-      hikesPathwaysListEl.appendChild(renderParagraphBlock(segmentsToInlineHtml(paraSegs), idx, paragraphs.length));
+      hikesPathwaysListEl.appendChild(renderParagraphBlock(segmentsToMarkupText(paraSegs), idx, paragraphs.length));
     });
   }
 
-  function renderParagraphBlock(html, index, total) {
+  function renderParagraphBlock(markupText, index, total) {
     const card = document.createElement('div');
     card.className = 'hikes-paragraph';
 
     const toolbar = document.createElement('div');
     toolbar.className = 'hikes-paragraph__toolbar';
 
-    const box = document.createElement('div');
-    box.className = 'draft-textarea draft-textarea--template hikes-paragraph__box';
-    box.contentEditable = 'true';
-    box.setAttribute('role', 'textbox');
-    box.setAttribute('aria-multiline', 'true');
+    const box = document.createElement('textarea');
+    box.className = 'draft-textarea draft-template-expand__input hikes-paragraph__box';
     box.setAttribute('aria-label', 'Paragraph ' + (index + 1) + ' of ' + total);
-    box.setAttribute('data-placeholder', 'Write this paragraph…');
-    box.innerHTML = html;
-    wireRichTextEditing(box);
+    box.setAttribute('placeholder', 'Write this paragraph…');
+    box.value = markupText;
     box.addEventListener('input', commitPathwaysToHike);
 
     const mk = (label, title, onClick) => {
@@ -2439,12 +2390,12 @@
       return b;
     };
 
-    toolbar.appendChild(mk('<b>B</b>', 'Bold (Ctrl+B)', () => { box.focus(); document.execCommand('bold'); }));
-    toolbar.appendChild(mk('<i>I</i>', 'Italic (Ctrl+I)', () => { box.focus(); document.execCommand('italic'); }));
-    toolbar.appendChild(mk('<u>U</u>', 'Underline (Ctrl+U)', () => { box.focus(); document.execCommand('underline'); }));
-    toolbar.appendChild(mk('&bull;', 'Toggle bullet on this line', () => { toggleLinePrefix(box, 'bullet'); commitPathwaysToHike(); }));
-    toolbar.appendChild(mk('1.', 'Toggle numbering on this line', () => { toggleLinePrefix(box, 'number'); commitPathwaysToHike(); }));
-    toolbar.appendChild(mk('Link', 'Insert a link at the cursor', () => { if (insertLinkInto(box)) commitPathwaysToHike(); }));
+    toolbar.appendChild(mk('<b>B</b>', 'Wrap selection in bold markers', () => wrapSelectionInTextarea(box, '\u27e6B\u27e7', '\u27e6/B\u27e7', 'bold text')));
+    toolbar.appendChild(mk('<i>I</i>', 'Wrap selection in italic markers', () => wrapSelectionInTextarea(box, '\u27e6I\u27e7', '\u27e6/I\u27e7', 'italic text')));
+    toolbar.appendChild(mk('<u>U</u>', 'Wrap selection in underline markers', () => wrapSelectionInTextarea(box, '\u27e6U\u27e7', '\u27e6/U\u27e7', 'underlined text')));
+    toolbar.appendChild(mk('&bull;', 'Toggle bullet on this line', () => toggleTextareaLinePrefix(box, 'bullet')));
+    toolbar.appendChild(mk('1.', 'Toggle numbering on this line', () => toggleTextareaLinePrefix(box, 'number')));
+    toolbar.appendChild(mk('Link', 'Insert a link at the cursor', () => insertLinkInTextarea(box)));
 
     const spacer = document.createElement('span');
     spacer.className = 'hikes-paragraph__toolbar-spacer';
@@ -2476,7 +2427,7 @@
   }
 
   function currentParagraphHtmlList() {
-    return readParagraphBoxes().map((box) => sanitizeElementHtml(box));
+    return readParagraphBoxes().map((box) => markupTextToHtml(box.value));
   }
 
   function addParagraph() {
@@ -2552,11 +2503,11 @@
     if (mode === 'pathways') {
       commitPathwaysToHike();
       const boxes = readParagraphBoxes();
-      plain = boxes.map((box) => plainTextFromElement(box)).join('\n');
-      html = boxes.map((box) => htmlStringToClipboardHtml(sanitizeElementHtml(box))).join('<br>');
+      plain = boxes.map((box) => plainTextFromMarkupText(box.value)).join('\n');
+      html = boxes.map((box) => htmlStringToClipboardHtml(markupTextToHtml(box.value))).join('<br>');
     } else {
       commitEditorMode();
-      plain = plainTextFromElement(hikesEditorBox);
+      plain = plainTextFromMarkupText(hikesEditorBox.value);
       html = htmlStringToClipboardHtml(hike.html || '');
     }
     await writeRichClipboard(html, plain);
