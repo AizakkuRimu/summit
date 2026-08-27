@@ -1214,6 +1214,15 @@
   // real <ul>/<ol><li> tree, discarding the raw bullet/number marker
   // rather than trying to preserve a glyph that depends on a font we
   // don't ship (see note above).
+  //
+  // A bullet's text that wraps onto a second visual line in Word is
+  // still exported as its own mso-list paragraph at the same level —
+  // just without a marker span, since only the true first line of an
+  // item carries the bullet/number glyph. Without checking for that,
+  // every wrapped line would turn into its own bogus extra bullet
+  // point instead of staying part of the item it wrapped from — the
+  // list equivalent of the mid-sentence paragraph splits fixed above,
+  // so it gets the same "no marker = still the same item" treatment.
   function convertWordListParagraphs(root) {
     const paras = Array.from(root.querySelectorAll('p'));
     let i = 0;
@@ -1235,6 +1244,7 @@
 
       const holder = document.createElement('div');
       const stack = []; // { level, listEl }
+      let lastLi = null;
       run.forEach(({ el, level }) => {
         const marker = el.querySelector('span[style*="mso-list"]');
         let markerText = '';
@@ -1242,6 +1252,15 @@
           markerText = marker.textContent.replace(/\s+/g, '');
           marker.remove();
         }
+
+        if (!marker && lastLi) {
+          // No bullet/number glyph on this line — it's a wrapped
+          // continuation of the previous item's text, not a new one.
+          if (lastLi.lastChild) lastLi.appendChild(document.createTextNode(' '));
+          while (el.firstChild) lastLi.appendChild(el.firstChild);
+          return;
+        }
+
         const ordered = /^[0-9]+[.)]$|^[a-zA-Z][.)]$|^[ivxlcdm]+[.)]$/i.test(markerText);
 
         while (stack.length && stack[stack.length - 1].level > level) stack.pop();
@@ -1260,6 +1279,7 @@
         const li = document.createElement('li');
         while (el.firstChild) li.appendChild(el.firstChild);
         top.listEl.appendChild(li);
+        lastLi = li;
       });
 
       if (holder.firstChild) run[0].el.replaceWith(holder.firstChild);
@@ -1499,8 +1519,32 @@
     }
   }
 
-  function flattenPasteLineBreaks(root) {
+  // preserveParagraphs: true for Word-sourced paste. Word's own soft
+  // line-wraps have mostly already been merged back together upstream
+  // by mergeWordLineWraps, using Word's own markup markers — but those
+  // markers aren't reliable for every Word/export flavour, so a stray
+  // wrap can still slip through as its own <p>/<div> here even though
+  // it's really the middle of a sentence, not a new paragraph. Rather
+  // than trust "it's a separate block" alone, each boundary is only
+  // treated as a genuine paragraph break when the text before it
+  // actually ends a sentence (., !, ?, optionally followed by a
+  // closing quote/bracket) — same signal a person would use. Anything
+  // else is joined with a single space, exactly like a normal
+  // mid-sentence wrap. Best-effort heuristic, not perfect sentence
+  // detection — same caveat as the auto-flow merge below.
+  function flattenPasteLineBreaks(root, preserveParagraphs) {
     explodeInternalBlankBreaks(root);
+
+    const SENTENCE_END = /[.!?]["'”’)\]]*$/;
+    function endsSentence(n) {
+      return SENTENCE_END.test((n.textContent || '').replace(/\u00a0/g, ' ').trim());
+    }
+    function appendNodeAsProse(merged, n) {
+      if (n.nodeType === 1) { appendProseInto(merged, n); return; }
+      const wrap = document.createElement('span');
+      wrap.appendChild(document.createTextNode(n.textContent));
+      appendProseInto(merged, wrap);
+    }
 
     function mergeRun(container, run) {
       if (!run.length) return;
@@ -1515,15 +1559,33 @@
       groups.forEach((g) => {
         if (g === 'blank') { replacements.push(document.createElement('p')); return; }
         if (!g.length) return;
-        const merged = document.createElement('p');
-        g.forEach((n) => {
-          if (n.nodeType === 1) { appendProseInto(merged, n); return; }
-          if (n.nodeType === 3) {
-            const wrap = document.createElement('span');
-            wrap.appendChild(document.createTextNode(n.textContent));
-            appendProseInto(merged, wrap);
+
+        if (preserveParagraphs) {
+          let cluster = document.createElement('p');
+          let clusterHasContent = false;
+          g.forEach((n, idx) => {
+            appendNodeAsProse(cluster, n);
+            clusterHasContent = true;
+            const isLast = idx === g.length - 1;
+            if (isLast || endsSentence(n)) {
+              trimMergedEdge(cluster, true);
+              trimMergedEdge(cluster, false);
+              replacements.push(cluster);
+              if (!isLast) replacements.push(document.createElement('p')); // spacer before the next real paragraph
+              cluster = document.createElement('p');
+              clusterHasContent = false;
+            }
+          });
+          if (clusterHasContent) {
+            trimMergedEdge(cluster, true);
+            trimMergedEdge(cluster, false);
+            replacements.push(cluster);
           }
-        });
+          return;
+        }
+
+        const merged = document.createElement('p');
+        g.forEach((n) => appendNodeAsProse(merged, n));
         trimMergedEdge(merged, true);
         trimMergedEdge(merged, false);
         replacements.push(merged);
@@ -1548,10 +1610,11 @@
 
   function sanitizeHTML(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    if (WORD_HTML_SIGNATURE.test(html)) normalizeWordPasteArtifacts(doc.body);
+    const fromWord = WORD_HTML_SIGNATURE.test(html);
+    if (fromWord) normalizeWordPasteArtifacts(doc.body);
     cleanNode(doc.body);
     wrapLooseInlineContent(doc.body);
-    flattenPasteLineBreaks(doc.body);
+    flattenPasteLineBreaks(doc.body, fromWord);
     return doc.body.innerHTML;
   }
 
@@ -1657,10 +1720,11 @@
 
   function matchPageFormatting(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    if (WORD_HTML_SIGNATURE.test(html)) normalizeWordPasteArtifacts(doc.body);
+    const fromWord = WORD_HTML_SIGNATURE.test(html);
+    if (fromWord) normalizeWordPasteArtifacts(doc.body);
     stripToPageFormatting(doc.body);
     wrapLooseInlineContent(doc.body);
-    flattenPasteLineBreaks(doc.body);
+    flattenPasteLineBreaks(doc.body, fromWord);
     return doc.body.innerHTML;
   }
 
