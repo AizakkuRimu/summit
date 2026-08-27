@@ -1664,6 +1664,25 @@
     return doc.body.innerHTML;
   }
 
+  // Plain-text paste (no text/html on the clipboard) never runs
+  // through sanitizeHTML()/flattenPasteLineBreaks() — it goes straight
+  // to execCommand('insertText', ...), which is what keeps each pasted
+  // line on its own line here instead of getting auto-flowed into one
+  // paragraph. This adds a blank line after every existing line (unless
+  // one's already there), so each line lands with visible breathing
+  // room instead of sitting flush against the next.
+  function addBlankLineBetweenLines(text) {
+    const lines = text.split(/\r\n|\r|\n/);
+    const out = [];
+    lines.forEach((line, i) => {
+      out.push(line);
+      const isLast = i === lines.length - 1;
+      const nextIsBlank = !isLast && lines[i + 1].trim() === '';
+      if (!isLast && !nextIsBlank) out.push('');
+    });
+    return out.join('\n');
+  }
+
   function handlePaste(e) {
     e.preventDefault();
     const clipboardData = e.clipboardData || window.clipboardData;
@@ -1676,7 +1695,7 @@
         document.execCommand('insertHTML', false, matchStyle ? matchPageFormatting(html) : sanitizeHTML(html));
       } else {
         const text = clipboardData.getData('text/plain');
-        document.execCommand('insertText', false, text);
+        document.execCommand('insertText', false, addBlankLineBetweenLines(text));
       }
     });
     schedulePagination();
