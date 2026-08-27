@@ -2365,6 +2365,27 @@
     });
   }
 
+  // Re-renders the paragraph boxes directly from a known list of
+  // per-paragraph HTML strings, without re-splitting hike.html on
+  // blank-line boundaries. renderPathwaysMode()'s split is the right
+  // tool the *first* time we carve a Hike's free text into paragraphs
+  // (Editor -> Pathways, or first paint), but re-running it after
+  // add/delete/move/import is lossy: joining an empty paragraph in
+  // with '<br><br>' produces a run of blank lines that, once put back
+  // through the blank-line splitter, can't be told apart from a
+  // shorter run — so an empty paragraph (very common right after
+  // "+ Add paragraph", or before importing into a fresh Hike)
+  // silently disappears instead of appearing. Operating on the
+  // already-known parts list sidesteps that entirely.
+  function renderPathwaysBoxesFromList(parts) {
+    const list = parts.length ? parts : [''];
+    hikesPathwaysListEl.innerHTML = '';
+    list.forEach((html, idx) => {
+      const markupText = segmentsToMarkupText(htmlToSegments(html));
+      hikesPathwaysListEl.appendChild(renderParagraphBlock(markupText, idx, list.length));
+    });
+  }
+
   function renderParagraphBlock(markupText, index, total) {
     const card = document.createElement('div');
     card.className = 'hikes-paragraph';
@@ -2436,7 +2457,7 @@
     const parts = currentParagraphHtmlList();
     parts.push('');
     hike.html = parts.join('<br><br>');
-    renderPathwaysMode();
+    renderPathwaysBoxesFromList(parts);
     requestAnimationFrame(() => {
       const boxes = readParagraphBoxes();
       const last = boxes[boxes.length - 1];
@@ -2451,7 +2472,7 @@
     if (parts.length <= 1) return;
     parts.splice(index, 1);
     hike.html = parts.join('<br><br>');
-    renderPathwaysMode();
+    renderPathwaysBoxesFromList(parts);
   }
 
   function moveParagraph(index, delta) {
@@ -2463,7 +2484,7 @@
     const [item] = parts.splice(index, 1);
     parts.splice(target, 0, item);
     hike.html = parts.join('<br><br>');
-    renderPathwaysMode();
+    renderPathwaysBoxesFromList(parts);
   }
 
   function insertImportedParagraph(html) {
@@ -2472,7 +2493,7 @@
     const parts = currentParagraphHtmlList();
     parts.push(html);
     hike.html = parts.join('<br><br>');
-    renderPathwaysMode();
+    renderPathwaysBoxesFromList(parts);
   }
 
   hikesAddParagraphBtn.addEventListener('click', addParagraph);
