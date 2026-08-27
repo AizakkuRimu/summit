@@ -231,17 +231,18 @@
                 </div>
               </div>
 
-              <!-- Editor mode: single rich-text box, exactly the Draft template editor -->
+              <!-- Editor mode: plain text box with bracket markers, exactly the
+                   Draft "Expand to edit" template editor (no rich-text/contenteditable) -->
               <div class="hikes-view" id="hikes-editor-view">
                 <div class="hikes-toolbar" role="toolbar" aria-label="Hike formatting toolbar">
-                  <button type="button" class="summit-btn" id="hikes-bold-btn" title="Bold (Ctrl+B)"><b>B</b></button>
-                  <button type="button" class="summit-btn" id="hikes-italic-btn" title="Italic (Ctrl+I)"><i>I</i></button>
-                  <button type="button" class="summit-btn" id="hikes-underline-btn" title="Underline (Ctrl+U)"><u>U</u></button>
+                  <button type="button" class="summit-btn" id="hikes-bold-btn" title="Wrap selection in bold markers"><b>B</b></button>
+                  <button type="button" class="summit-btn" id="hikes-italic-btn" title="Wrap selection in italic markers"><i>I</i></button>
+                  <button type="button" class="summit-btn" id="hikes-underline-btn" title="Wrap selection in underline markers"><u>U</u></button>
                   <button type="button" class="summit-btn" id="hikes-bullet-btn" title="Toggle bullet on this line">&bull;</button>
                   <button type="button" class="summit-btn" id="hikes-number-btn" title="Toggle numbering on this line">1.</button>
                   <button type="button" class="summit-btn" id="hikes-link-btn" title="Insert a link at the cursor">Insert link</button>
                 </div>
-                <div id="hikes-editor-box" class="draft-textarea draft-textarea--template hikes-editor-box" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Hike text" data-placeholder="Write your Hike here… (bold/underline/links copy out cleanly)"></div>
+                <textarea id="hikes-editor-box" class="draft-textarea draft-template-expand__input hikes-editor-box" aria-label="Hike text" placeholder="Write your Hike here… (bold/underline/links copy out cleanly)" spellcheck="true"></textarea>
               </div>
 
               <!-- Pathways mode: the same Hike's text as separate paragraph blocks -->
