@@ -637,3 +637,32 @@
 .hikes-import__result-snippet a {
   color: var(--bronze-deep);
 }
+
+/* ---------- Paragraph preview modal (Pathways) ---------- */
+
+.hikes-preview__panel {
+  width: min(560px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.hikes-preview__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 2px 2px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.hikes-preview__body a {
+  color: var(--bronze-deep);
+}
+
+.hikes-preview__body:empty::before {
+  content: 'Nothing to preview yet — this paragraph is empty.';
+  color: var(--gray);
+}
