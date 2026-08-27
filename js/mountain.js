@@ -1592,10 +1592,30 @@
     }
   }
 
+  // TABLE/TR/TD aren't in ALLOWED_TAGS, so cleanNode below dissolves a
+  // pasted table completely — every row/cell boundary is gone by the
+  // time it's done, leaving just a flat sequence of whatever was
+  // inside the cells. That's fine for a cell whose text already sits
+  // in its own <p> (common for a multi-line cell), but a short,
+  // single-line cell is very often exported as bare text straight
+  // inside the <td>, with no <p> of its own. Once the table dissolves,
+  // that bare text is just loose content sitting flush against the
+  // next cell's — and wrapLooseInlineContent (which has no idea a
+  // cell boundary was ever there) glues the two together into one
+  // paragraph. Forcing every cell's own content into a block first —
+  // before the table is touched — means each cell is guaranteed to
+  // survive as its own paragraph once the table around it dissolves,
+  // regardless of whether Word happened to wrap that particular cell
+  // in a <p> or not.
+  function wrapTableCellContent(root) {
+    Array.from(root.querySelectorAll('td, th')).forEach((cell) => wrapLooseInlineContent(cell));
+  }
+
   function sanitizeHTML(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const fromWord = WORD_HTML_SIGNATURE.test(html);
     if (fromWord) normalizeWordPasteArtifacts(doc.body);
+    wrapTableCellContent(doc.body);
     cleanNode(doc.body);
     wrapLooseInlineContent(doc.body);
     flattenPasteLineBreaks(doc.body, fromWord);
@@ -1706,6 +1726,7 @@
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const fromWord = WORD_HTML_SIGNATURE.test(html);
     if (fromWord) normalizeWordPasteArtifacts(doc.body);
+    wrapTableCellContent(doc.body);
     stripToPageFormatting(doc.body);
     wrapLooseInlineContent(doc.body);
     flattenPasteLineBreaks(doc.body, fromWord);
