@@ -1044,6 +1044,19 @@
     </div>
   </div>
 
+  <div class="summit-modal" id="hikes-preview-modal" hidden aria-hidden="true">
+    <div class="summit-modal__backdrop" data-hikes-preview-close></div>
+    <div class="summit-modal__panel hikes-preview__panel" role="dialog" aria-modal="true" aria-labelledby="hikes-preview-title">
+      <div class="summit-modal__header">
+        <h2 class="summit-modal__title" id="hikes-preview-title">Preview</h2>
+        <button type="button" class="summit-modal__close" data-hikes-preview-close aria-label="Close">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><line x1="4" y1="4" x2="16" y2="16"/><line x1="16" y1="4" x2="4" y2="16"/></svg>
+        </button>
+      </div>
+      <div class="hikes-preview__body" id="hikes-preview-body"></div>
+    </div>
+  </div>
+
   <div class="summit-toast" id="summit-toast" hidden></div>
 
   <!-- Section 4: data handling, import & export. Loaded before the tab
