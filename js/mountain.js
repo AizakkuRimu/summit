@@ -2976,8 +2976,8 @@
     hikesPathwaysListEl.innerHTML = '';
 
     const help = document.createElement('p');
-    help.className = 'hikes-paragraph__preview';
-    help.textContent = 'Check the paragraphs to merge into one, then Save Groups. They\u2019ll merge in top-to-bottom order, wherever the first checked one currently sits.';
+    help.className = 'hikes-grouping__help';
+    help.textContent = 'Check the paragraphs to merge into one, then Save Groups. They\u2019ll merge in top-to-bottom order, wherever the first checked one currently sits. The checklist stays open after saving, so you can group another batch right away — click Done when you\u2019re finished.';
     hikesPathwaysListEl.appendChild(help);
 
     blocks.forEach((block, idx) => {
@@ -3051,8 +3051,13 @@
     hike.pathwaysBlocks = remaining;
     hike.html = joinBlocksToHtml(remaining);
     const mergedCount = groupingSelectedIds.size;
-    exitGroupingModeAndRender();
-    showHikesToast('Grouped ' + mergedCount + ' paragraphs into one');
+    // Stay in the checklist — clear the checkboxes and re-render with
+    // the freshly merged paragraph in place, ready for another round
+    // of grouping. Only "Done" exits back to the normal accordion.
+    groupingSelectedIds = new Set();
+    if (remaining.length < 2) { exitGroupingModeAndRender(); showHikesToast('Grouped ' + mergedCount + ' paragraphs into one'); return; }
+    renderGroupingList(remaining);
+    showHikesToast('Grouped ' + mergedCount + ' paragraphs into one — keep checking to group more, or Done to finish');
   }
 
   function toggleParagraphExpanded(id) {
@@ -3424,8 +3429,8 @@
       return b;
     };
     hikesGroupBtn = mkToolbarBtn('Group Paragraphs', 'Check several paragraphs and merge them into one', () => enterGroupingMode());
-    hikesGroupSaveBtn = mkToolbarBtn('Save Groups', 'Merge the checked paragraphs into one', () => saveGrouping(), true);
-    hikesGroupCancelBtn = mkToolbarBtn('Cancel', 'Exit without grouping anything', () => exitGroupingModeAndRender(), true);
+    hikesGroupSaveBtn = mkToolbarBtn('Save Groups', 'Merge the checked paragraphs into one and keep grouping', () => saveGrouping(), true);
+    hikesGroupCancelBtn = mkToolbarBtn('Done', 'Finish grouping and go back to the normal paragraph view', () => exitGroupingModeAndRender(), true);
     hikesImportParagraphBtn.parentNode.insertBefore(hikesGroupBtn, hikesImportParagraphBtn.nextSibling);
     hikesImportParagraphBtn.parentNode.insertBefore(hikesGroupSaveBtn, hikesGroupBtn.nextSibling);
     hikesImportParagraphBtn.parentNode.insertBefore(hikesGroupCancelBtn, hikesGroupSaveBtn.nextSibling);
