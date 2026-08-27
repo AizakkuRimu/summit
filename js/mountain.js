@@ -2233,10 +2233,14 @@
       textarea.focus();
       showHikesToast('Extracted from Document');
     } catch (err) {
-      // Surface the failure instead of doing nothing silently — check
-      // the browser console (F12) for the full error if this shows up.
-      console.error('Extract from Document failed:', err);
-      showHikesToast('Extract failed — see browser console (F12) for details');
+      // Put the actual error text directly in the box — easier to
+      // copy/paste back than digging through devtools.
+      const message = (err && (err.stack || err.message)) ? String(err.stack || err.message) : String(err);
+      const start = textarea.selectionStart || 0;
+      const end = textarea.selectionEnd || 0;
+      textarea.setRangeText('[Extract error — copy this line] ' + message, start, end, 'end');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      showHikesToast('Extract failed — error text inserted into the box');
     }
   }
 
