@@ -1392,7 +1392,19 @@
 
   function cleanNode(node) {
     Array.from(node.childNodes).forEach((child) => {
-      if (child.nodeType === Node.TEXT_NODE) return;
+      if (child.nodeType === Node.TEXT_NODE) {
+        // HTML collapses runs of whitespace (including literal
+        // newlines/tabs in the source markup) to a single space when
+        // rendered. We're working on a detached, unrendered document,
+        // so that collapsing never happens automatically — Word and
+        // Outlook in particular hand-wrap their clipboard HTML source
+        // at a fixed column width, and without this those source-only
+        // line breaks would show up as real line breaks mid-sentence
+        // once pasted. \u00a0 (nbsp) is deliberately left alone since
+        // it's an intentional space, not source formatting.
+        child.textContent = child.textContent.replace(/[ \t\n\r\f]+/g, ' ');
+        return;
+      }
       if (child.nodeType !== Node.ELEMENT_NODE) { node.removeChild(child); return; }
 
       if (STRIP_ENTIRELY.has(child.tagName)) {
@@ -2250,6 +2262,38 @@
   // setRangeText-based string editing (same API Draft's expand
   // modal uses), so it's immune to any contenteditable Range/caret
   // quirks and arrow keys/Backspace/selection stay 100% native.
+  // Collapses a paragraph's raw marker text down to a single flowing
+  // line: every line break is removed, runs of whitespace collapse to
+  // one space, and any sentence-ending punctuation (. ! ?) that's
+  // butted directly up against the next sentence with no space at all
+  // gets exactly one space inserted. Formatting markers (⟦B⟧ etc.) are
+  // left untouched since they're just literal characters in this
+  // marker-text model — same as every other textarea-editing helper
+  // in this file.
+  //
+  // The "insert a space after sentence punctuation" step only fires
+  // when punctuation is immediately followed by an uppercase letter,
+  // an opening quote/paren, or a formatting marker — not by a digit or
+  // lowercase letter — so it doesn't mangle decimals ("3.14") or
+  // abbreviations ("e.g. next" already has its space; "U.S." rarely
+  // gets touched). It's a heuristic, not perfect sentence detection.
+  function rearrangeParagraphText(text) {
+    return text
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/([.!?])(?=[A-Z\u201c"'(\u27e6])/g, '$1 ')
+      .replace(/[ \t]+/g, ' ')
+      .trim();
+  }
+
+  function rearrangeParagraphBox(textarea) {
+    const next = rearrangeParagraphText(textarea.value);
+    if (next === textarea.value) { showHikesToast('Already tidy'); return; }
+    textarea.value = next;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    showHikesToast('Paragraph rearranged');
+  }
+
   function wrapSelectionInTextarea(textarea, openTag, closeTag, placeholder) {
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
@@ -2660,6 +2704,7 @@
     toolbar.appendChild(mk('&bull;', 'Toggle bullet on this line', () => toggleTextareaLinePrefix(box, 'bullet')));
     toolbar.appendChild(mk('1.', 'Toggle numbering on this line', () => toggleTextareaLinePrefix(box, 'number')));
     toolbar.appendChild(mk('Link', 'Insert a link at the cursor', () => insertLinkInTextarea(box)));
+    toolbar.appendChild(mk('Rearrange', 'Remove line breaks and normalize spacing between sentences', () => rearrangeParagraphBox(box)));
     toolbar.appendChild(mk('Extract from Document', 'Pull the Document tab\u2019s current content in here, converted to bold/italic/underline/links/bullets', () => extractFromDocumentInto(box)));
 
     body.appendChild(toolbar);
@@ -2771,7 +2816,7 @@
       commitPathwaysToHike();
       const boxes = readParagraphBoxes();
       plain = boxes.map((box) => plainTextFromMarkupText(box.value)).join('\n');
-      html = boxes.map((box) => htmlStringToClipboardHtml(markupTextToHtml(box.value))).join('<br>');
+      html = boxes.map((box) => htmlStringToClipboardHtml(markupTextToHtml(box.value))).join('<div><br></div>');
     } else {
       commitEditorMode();
       plain = plainTextFromMarkupText(hikesEditorBox.value);
