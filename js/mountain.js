@@ -1275,8 +1275,15 @@
     const isSoftParagraph = (el) => {
       if (!el || el.nodeType !== 1 || (el.tagName !== 'P' && el.tagName !== 'DIV')) return false;
       const style = el.getAttribute('style') || '';
-      const cls = el.getAttribute('class') || '';
-      return /mso-margin-(top|bottom)-alt/i.test(style) || /\bMsoNormal\b/i.test(cls);
+      // mso-margin-*-alt:auto is the specific signal Word emits for its
+      // "no space between paragraphs of the same style" setting — the
+      // one case that genuinely looks like a wrapped/continued line.
+      // The MsoNormal *class* alone used to be treated as a second
+      // signal, but Word stamps that class on virtually every body
+      // paragraph regardless of spacing, so it was merging real,
+      // distinct paragraphs into one run joined by a single space —
+      // collapsing an entire pasted document into one block of text.
+      return /mso-margin-(top|bottom)-alt/i.test(style);
     };
 
     function mergeRun(container) {
