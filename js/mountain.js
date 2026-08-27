@@ -2215,22 +2215,29 @@
   // the clipboard the way a <textarea> does) and then extracting it
   // here.
   function extractFromDocumentInto(textarea) {
-    if (!window.Summit.mountain || typeof window.Summit.mountain.getHTML !== 'function') {
-      showHikesToast('Document view isn\u2019t available right now');
-      return;
+    try {
+      if (!window.Summit || !window.Summit.mountain || typeof window.Summit.mountain.getHTML !== 'function') {
+        showHikesToast('Document view isn\u2019t available right now');
+        return;
+      }
+      const html = window.Summit.mountain.getHTML();
+      if (!html || !html.trim()) {
+        showHikesToast('Document is empty — nothing to extract');
+        return;
+      }
+      const markupText = pastedHtmlToMarkupText(html);
+      const start = textarea.selectionStart || 0;
+      const end = textarea.selectionEnd || 0;
+      textarea.setRangeText(markupText, start, end, 'end');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      textarea.focus();
+      showHikesToast('Extracted from Document');
+    } catch (err) {
+      // Surface the failure instead of doing nothing silently — check
+      // the browser console (F12) for the full error if this shows up.
+      console.error('Extract from Document failed:', err);
+      showHikesToast('Extract failed — see browser console (F12) for details');
     }
-    const html = window.Summit.mountain.getHTML();
-    if (!html || !html.trim()) {
-      showHikesToast('Document is empty — nothing to extract');
-      return;
-    }
-    const markupText = pastedHtmlToMarkupText(html);
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    textarea.setRangeText(markupText, start, end, 'end');
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    textarea.focus();
-    showHikesToast('Extracted from Document');
   }
 
   // Wraps (or, with nothing selected, inserts a placeholder inside)
@@ -2470,7 +2477,8 @@
   hikesBulletBtn.addEventListener('click', () => toggleTextareaLinePrefix(hikesEditorBox, 'bullet'));
   hikesNumberBtn.addEventListener('click', () => toggleTextareaLinePrefix(hikesEditorBox, 'number'));
   hikesLinkBtn.addEventListener('click', () => insertLinkInTextarea(hikesEditorBox));
-  hikesExtractBtn.addEventListener('click', () => extractFromDocumentInto(hikesEditorBox));
+  if (hikesExtractBtn) hikesExtractBtn.addEventListener('click', () => extractFromDocumentInto(hikesEditorBox));
+  else console.error('Hikes: #hikes-extract-btn not found in the page — the Extract button won\u2019t work until index.html has it.');
 
   // ============================================================
   // Pathways mode — the same Hike's text as separate, reorderable,
