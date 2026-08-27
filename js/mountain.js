@@ -2693,6 +2693,7 @@
     toolbar.appendChild(mk('1.', 'Toggle numbering on this line', () => toggleTextareaLinePrefix(box, 'number')));
     toolbar.appendChild(mk('Link', 'Insert a link at the cursor', () => insertLinkInTextarea(box)));
     toolbar.appendChild(mk('Rearrange', 'Remove line breaks and normalize spacing between sentences', () => rearrangeParagraphBox(box)));
+    toolbar.appendChild(mk('Preview', 'See this paragraph with formatting rendered', () => openParagraphPreview(box, index)));
     toolbar.appendChild(mk('Extract from Document', 'Pull the Document tab\u2019s current content in here, converted to bold/italic/underline/links/bullets', () => extractFromDocumentInto(box)));
 
     body.appendChild(toolbar);
@@ -2824,6 +2825,10 @@
   const importQueryInput = document.getElementById('hikes-import-query');
   const importSubFilterSel = document.getElementById('hikes-import-subfilter');
   const importResultsEl = document.getElementById('hikes-import-results');
+
+  const previewModal = document.getElementById('hikes-preview-modal');
+  const previewTitleEl = document.getElementById('hikes-preview-title');
+  const previewBodyEl = document.getElementById('hikes-preview-body');
   const importCountEl = document.getElementById('hikes-import-count');
 
   let importTargetBlockId = null; // set when opened from a paragraph's own "⊕ Template" button
@@ -2931,6 +2936,34 @@
   importQueryInput.addEventListener('input', renderImportResults);
   importSubFilterSel.addEventListener('change', renderImportResults);
   hikesImportParagraphBtn.addEventListener('click', () => openImportModal(null));
+
+  // ============================================================
+  // Paragraph preview (Pathways)
+  //
+  // The Pathways textarea shows raw marker text (⟦B⟧/⟦I⟧/⟦U⟧/⟦L:url⟧
+  // brackets) so editing is fully native, but that means the user
+  // never actually sees the formatted result inline. This renders
+  // that one paragraph's current, uncommitted textarea content
+  // through the same markupTextToHtml() pipeline used for copy-out,
+  // so bold/italic/underline/links show exactly as they'll appear
+  // when copied — without needing to commit or leave Pathways.
+  // ============================================================
+
+  function openParagraphPreview(box, index) {
+    if (!previewModal) return;
+    if (previewTitleEl) previewTitleEl.textContent = 'Preview — Paragraph ' + (index + 1);
+    previewBodyEl.innerHTML = markupTextToHtml(box.value || '');
+    previewModal.hidden = false;
+    previewModal.setAttribute('aria-hidden', 'false');
+  }
+  function closeParagraphPreview() {
+    if (!previewModal) return;
+    previewModal.hidden = true;
+    previewModal.setAttribute('aria-hidden', 'true');
+  }
+  if (previewModal) {
+    previewModal.querySelectorAll('[data-hikes-preview-close]').forEach((el) => el.addEventListener('click', closeParagraphPreview));
+  }
 
   // ---------- Initial paint ----------
   renderHikesList();
