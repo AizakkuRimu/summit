@@ -4321,6 +4321,147 @@
   // single space, which is what was causing lines to run together.
   const WORD_HTML_SIGNATURE = /mso-|urn:schemas-microsoft-com:office|\bMsoNormal\b/i;
 
+  // ------------------------------------------------------------
+  // Auto-flow paste — ported from mountain.js's Document-view paste
+  // handling so Mountain and the template editor behave identically.
+  // Merges runs of pasted <p>/<div> prose into one flowing paragraph
+  // (joined by exactly one space per break, same as
+  // rearrangeParagraphText's textarea join), while leaving <ul>/<ol>,
+  // <table>, headings, and <blockquote> completely alone as their
+  // own line(s) — this editor's model has no real <ul> of its own
+  // (list items already become flat "\u2022 "/"N. " prefixed lines a
+  // few steps below), so keeping every li/tr on its own line is what
+  // "leave lists as separate lines" means here. A genuinely empty
+  // <p>/<div> is a real paragraph break and is kept, not merged away.
+  //
+  // Runs before the "insert <br> after every block" step below, so
+  // each merged prose run collapses to a single <br>-terminated line
+  // instead of one per source element. Best-effort heuristic on
+  // ambiguous source markup, same caveat as everywhere else this
+  // pattern is used — and, like the Document-view version, only
+  // operates on direct siblings (a paste that's entirely wrapped in
+  // one outer <div> won't be flattened inside it).
+  // ------------------------------------------------------------
+  const PASTE_MERGE_BOUNDARY_TAGS = new Set(['UL', 'OL', 'TABLE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE']);
+
+  function isBlankBlockEl(el) {
+    return el.nodeType === 1 && (el.tagName === 'P' || el.tagName === 'DIV') && !el.textContent.replace(/\u00a0/g, ' ').trim();
+  }
+
+  function explodeInternalBlankBreaks(root) {
+    Array.from(root.querySelectorAll('p, div')).forEach((el) => {
+      const runs = [[]];
+      let brRun = 0;
+      Array.from(el.childNodes).forEach((k) => {
+        if (k.nodeType === 1 && k.tagName === 'BR') {
+          brRun += 1;
+          if (brRun >= 2) { runs.push([]); brRun = 0; return; }
+          runs[runs.length - 1].push(k);
+          return;
+        }
+        if (k.nodeType === 3 && !k.textContent.trim()) { runs[runs.length - 1].push(k); return; }
+        brRun = 0;
+        runs[runs.length - 1].push(k);
+      });
+      if (runs.length < 2) return;
+      // Every boundary between two `runs` entries came from a genuine
+      // double-<br>, so it needs an actual blank element between the
+      // pieces — otherwise the merge pass below just glues the two
+      // non-empty pieces back together.
+      const toInsert = [];
+      runs.forEach((kidsForPiece, idx) => {
+        const piece = document.createElement(el.tagName.toLowerCase());
+        kidsForPiece.forEach((k) => piece.appendChild(k));
+        toInsert.push(piece);
+        if (idx < runs.length - 1) toInsert.push(document.createElement(el.tagName.toLowerCase()));
+      });
+      toInsert.forEach((p) => el.parentNode.insertBefore(p, el));
+      el.remove();
+    });
+  }
+
+  function appendProseInto(merged, sourceEl) {
+    function ensureSpace() {
+      const last = merged.lastChild;
+      if (!last) return;
+      let t = last;
+      while (t.nodeType === 1 && t.lastChild) t = t.lastChild;
+      if (t.nodeType === 3 && /\s$/.test(t.textContent)) return;
+      merged.appendChild(document.createTextNode(' '));
+    }
+    function cloneInto(destParent, node, isTop) {
+      if (node.nodeType === 3) {
+        const text = node.textContent.replace(/[ \t\r\n]+/g, ' ');
+        if (!text) return;
+        if (isTop && /^ /.test(text)) ensureSpace();
+        destParent.appendChild(document.createTextNode(isTop ? text.replace(/^ /, '') : text));
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      if (node.tagName === 'BR') { if (isTop) ensureSpace(); else destParent.appendChild(document.createTextNode(' ')); return; }
+      const clone = node.cloneNode(false);
+      destParent.appendChild(clone);
+      Array.from(node.childNodes).forEach((c) => cloneInto(clone, c, false));
+    }
+    if (merged.childNodes.length) ensureSpace();
+    Array.from(sourceEl.childNodes).forEach((c) => cloneInto(merged, c, true));
+  }
+
+  function trimMergedEdge(el, fromStart) {
+    let n = fromStart ? el.firstChild : el.lastChild;
+    while (n && n.nodeType === 1 && (fromStart ? n.firstChild : n.lastChild)) n = fromStart ? n.firstChild : n.lastChild;
+    if (n && n.nodeType === 3) {
+      n.textContent = fromStart ? n.textContent.replace(/^[ \t]+/, '') : n.textContent.replace(/[ \t]+$/, '');
+    }
+  }
+
+  function flattenPasteLineBreaks(root) {
+    explodeInternalBlankBreaks(root);
+
+    function mergeRun(container, run) {
+      if (!run.length) return;
+      const groups = [[]];
+      run.forEach((n) => {
+        if (n.nodeType === 3 && !n.textContent.trim()) return;
+        if (isBlankBlockEl(n)) { groups.push('blank'); groups.push([]); return; }
+        groups[groups.length - 1].push(n);
+      });
+
+      const replacements = [];
+      groups.forEach((g) => {
+        if (g === 'blank') { replacements.push(document.createElement('p')); return; }
+        if (!g.length) return;
+        const merged = document.createElement('p');
+        g.forEach((n) => {
+          if (n.nodeType === 1) { appendProseInto(merged, n); return; }
+          if (n.nodeType === 3) {
+            const wrap = document.createElement('span');
+            wrap.appendChild(document.createTextNode(n.textContent));
+            appendProseInto(merged, wrap);
+          }
+        });
+        trimMergedEdge(merged, true);
+        trimMergedEdge(merged, false);
+        replacements.push(merged);
+      });
+
+      const anchor = run[0];
+      replacements.forEach((r) => container.insertBefore(r, anchor));
+      run.forEach((n) => n.remove());
+    }
+
+    const kids = Array.from(root.childNodes);
+    let i = 0;
+    while (i < kids.length) {
+      if (kids[i].nodeType === 1 && PASTE_MERGE_BOUNDARY_TAGS.has(kids[i].tagName)) { i++; continue; }
+      const run = [];
+      let j = i;
+      while (j < kids.length && !(kids[j].nodeType === 1 && PASTE_MERGE_BOUNDARY_TAGS.has(kids[j].tagName))) { run.push(kids[j]); j++; }
+      mergeRun(root, run);
+      i = j;
+    }
+  }
+
   function htmlToTemplateFragment(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const blockSelector = 'p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote';
@@ -4356,6 +4497,8 @@
       }
       li.insertBefore(document.createTextNode(marker), li.firstChild);
     });
+
+    flattenPasteLineBreaks(doc.body);
 
     Array.from(doc.body.querySelectorAll(blockSelector)).forEach((el) => {
       el.insertAdjacentHTML('afterend', '<br>');

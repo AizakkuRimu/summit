@@ -7,6 +7,9 @@
          highlight, font size, case conversion)
    - 2.3 Bullet / numbered lists with nested indent levels
    - 2.4 Links and paste-and-match-formatting clipboard support
+   - 2.4b Auto-flow paste: merges pasted line breaks into flowing
+         prose (lists excluded), shared by every paste path in the
+         app via sanitizeHTML()
    - 2.5 Clear formatting
 
    Content lives directly in the DOM under #mountain-pages,
@@ -1382,11 +1385,173 @@
     }
   }
 
+  // ------------------------------------------------------------
+  // Auto-flow paste (2.4b)
+  //
+  // "Each visual line lands as its own <p>/<div>" isn't a Word-only
+  // artifact — most web pages, chat apps, PDF viewers, and note apps
+  // do the same thing on copy. Rather than keep every one of those
+  // as a hard line break, this merges runs of prose into one flowing
+  // paragraph (joined the same "always exactly one space, never
+  // glued to the previous word" way rearrangeParagraphText joins
+  // textarea lines), while leaving <ul>/<ol> completely untouched —
+  // list items stay one-per-line. A genuinely empty paragraph/div is
+  // treated as an intentional blank line and kept as a paragraph
+  // break rather than merged away. This is a best-effort heuristic
+  // on ambiguous source markup, not perfect sentence detection — same
+  // caveat as rearrangeParagraphText.
+  //
+  // Runs after wrapLooseInlineContent, so every top-level node it
+  // sees is already a real block (P/DIV/UL/OL) — nothing loose left
+  // to trip over.
+  //
+  // This is called from sanitizeHTML(), which every paste destination
+  // in the app funnels through — Document paste directly, and Hikes/
+  // Pathways paste + "Extract from Document" indirectly via
+  // pastedHtmlToMarkupText() below, which calls
+  // window.Summit.mountain.sanitizeHTML(). One implementation, every
+  // paste path gets it for free.
+  // ------------------------------------------------------------
+
+  // A <p>/<div> that contains its own internal double-<br> (a blank
+  // line typed *inside* one element, rather than as a sibling
+  // element) is split into separate siblings first, so the grouping
+  // pass below sees the same "empty block = paragraph break" signal
+  // it already uses for real siblings.
+  function explodeInternalBlankBreaks(root) {
+    Array.from(root.querySelectorAll('p, div')).forEach((el) => {
+      const runs = [[]];
+      let brRun = 0;
+      Array.from(el.childNodes).forEach((k) => {
+        if (k.nodeType === 1 && k.tagName === 'BR') {
+          brRun += 1;
+          if (brRun >= 2) { runs.push([]); brRun = 0; return; }
+          runs[runs.length - 1].push(k);
+          return;
+        }
+        if (k.nodeType === 3 && !k.textContent.trim()) { runs[runs.length - 1].push(k); return; }
+        brRun = 0;
+        runs[runs.length - 1].push(k);
+      });
+      if (runs.length < 2) return;
+      // Every boundary between two `runs` entries came from a genuine
+      // double-<br>, so it needs an actual blank element between the
+      // pieces — otherwise the merge pass below just glues the two
+      // non-empty pieces back together, since neither one is itself
+      // empty.
+      const toInsert = [];
+      runs.forEach((kidsForPiece, idx) => {
+        const piece = document.createElement(el.tagName.toLowerCase());
+        kidsForPiece.forEach((k) => piece.appendChild(k));
+        toInsert.push(piece);
+        if (idx < runs.length - 1) toInsert.push(document.createElement(el.tagName.toLowerCase()));
+      });
+      toInsert.forEach((p) => el.parentNode.insertBefore(p, el));
+      el.remove();
+    });
+  }
+
+  function isBlankBlockEl(el) {
+    return el.nodeType === 1 && (el.tagName === 'P' || el.tagName === 'DIV') && !el.textContent.replace(/\u00a0/g, ' ').trim();
+  }
+
+  // Appends sourceEl's inline content onto `merged`, joining it to
+  // whatever's already there with exactly one space — never zero
+  // (glued to the previous word), never two. A lone <br> found
+  // directly inside sourceEl (a soft wrap) is treated as the same
+  // kind of join point rather than copied across as a real break.
+  function appendProseInto(merged, sourceEl) {
+    function ensureSpace() {
+      const last = merged.lastChild;
+      if (!last) return;
+      let t = last;
+      while (t.nodeType === 1 && t.lastChild) t = t.lastChild;
+      if (t.nodeType === 3 && /\s$/.test(t.textContent)) return;
+      merged.appendChild(document.createTextNode(' '));
+    }
+    function cloneInto(destParent, node, isTop) {
+      if (node.nodeType === 3) {
+        const text = node.textContent.replace(/[ \t\r\n]+/g, ' ');
+        if (!text) return;
+        if (isTop && /^ /.test(text)) ensureSpace();
+        destParent.appendChild(document.createTextNode(isTop ? text.replace(/^ /, '') : text));
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      if (node.tagName === 'BR') { if (isTop) ensureSpace(); else destParent.appendChild(document.createTextNode(' ')); return; }
+      const clone = node.cloneNode(false);
+      destParent.appendChild(clone);
+      Array.from(node.childNodes).forEach((c) => cloneInto(clone, c, false));
+    }
+    if (merged.childNodes.length) ensureSpace();
+    Array.from(sourceEl.childNodes).forEach((c) => cloneInto(merged, c, true));
+  }
+
+  // Strips a leading/trailing space left on a merged paragraph's
+  // outermost text (e.g. a trailing soft-wrap <br> with nothing
+  // after it, since appendProseInto has no way to know in advance
+  // that a join point turned out to be the very last thing added).
+  function trimMergedEdge(el, fromStart) {
+    let n = fromStart ? el.firstChild : el.lastChild;
+    while (n && n.nodeType === 1 && (fromStart ? n.firstChild : n.lastChild)) n = fromStart ? n.firstChild : n.lastChild;
+    if (n && n.nodeType === 3) {
+      n.textContent = fromStart ? n.textContent.replace(/^[ \t]+/, '') : n.textContent.replace(/[ \t]+$/, '');
+    }
+  }
+
+  function flattenPasteLineBreaks(root) {
+    explodeInternalBlankBreaks(root);
+
+    function mergeRun(container, run) {
+      if (!run.length) return;
+      const groups = [[]];
+      run.forEach((n) => {
+        if (n.nodeType === 3 && !n.textContent.trim()) return; // drop whitespace-only text between elements
+        if (isBlankBlockEl(n)) { groups.push('blank'); groups.push([]); return; }
+        groups[groups.length - 1].push(n);
+      });
+
+      const replacements = [];
+      groups.forEach((g) => {
+        if (g === 'blank') { replacements.push(document.createElement('p')); return; }
+        if (!g.length) return;
+        const merged = document.createElement('p');
+        g.forEach((n) => {
+          if (n.nodeType === 1) { appendProseInto(merged, n); return; }
+          if (n.nodeType === 3) {
+            const wrap = document.createElement('span');
+            wrap.appendChild(document.createTextNode(n.textContent));
+            appendProseInto(merged, wrap);
+          }
+        });
+        trimMergedEdge(merged, true);
+        trimMergedEdge(merged, false);
+        replacements.push(merged);
+      });
+
+      const anchor = run[0];
+      replacements.forEach((r) => container.insertBefore(r, anchor));
+      run.forEach((n) => n.remove());
+    }
+
+    const kids = Array.from(root.childNodes);
+    let i = 0;
+    while (i < kids.length) {
+      if (kids[i].nodeType === 1 && (kids[i].tagName === 'UL' || kids[i].tagName === 'OL')) { i++; continue; }
+      const run = [];
+      let j = i;
+      while (j < kids.length && !(kids[j].nodeType === 1 && (kids[j].tagName === 'UL' || kids[j].tagName === 'OL'))) { run.push(kids[j]); j++; }
+      mergeRun(root, run);
+      i = j;
+    }
+  }
+
   function sanitizeHTML(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     if (WORD_HTML_SIGNATURE.test(html)) normalizeWordPasteArtifacts(doc.body);
     cleanNode(doc.body);
     wrapLooseInlineContent(doc.body);
+    flattenPasteLineBreaks(doc.body);
     return doc.body.innerHTML;
   }
 
@@ -1495,6 +1660,7 @@
     if (WORD_HTML_SIGNATURE.test(html)) normalizeWordPasteArtifacts(doc.body);
     stripToPageFormatting(doc.body);
     wrapLooseInlineContent(doc.body);
+    flattenPasteLineBreaks(doc.body);
     return doc.body.innerHTML;
   }
 
