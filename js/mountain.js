@@ -2610,6 +2610,100 @@
   }
 
   // ============================================================
+  // Extract to Pathways (2.9) — turns a whole Hike into one
+  // sentence-per-paragraph Pathways list in one click, as an
+  // alternative to hand-splitting or relying on pasted structure.
+  //
+  // Two steps:
+  //  1. Flatten the Hike's entire marker text to one flowing line —
+  //     every line break becomes a single space, runs of whitespace
+  //     collapse to one, and a missing space after . ! ? : ; butted
+  //     directly against the next sentence gets inserted. Same rule
+  //     set as "Rearrange", just applied to the whole Hike rather
+  //     than one paragraph, and extended to also treat : and ; as
+  //     sentence-enders (Rearrange only inserts a space there; this
+  //     also treats them as a split point below).
+  //  2. Split that flattened line into one paragraph per sentence,
+  //     breaking after any of . ! ? : ; (never a comma) that's
+  //     followed by whitespace or end of text.
+  //
+  // A split point is only honoured when no ⟦B⟧/⟦I⟧/⟦U⟧/⟦L:url⟧
+  // marker is left open at that point — otherwise a bold/italic/
+  // underline/link run spanning two sentences would get cut in half,
+  // leaving an unclosed opening marker in one paragraph and a stray
+  // closing one in the next. Splitting is skipped there and that run
+  // stays together in one paragraph instead.
+  // ============================================================
+
+  const SENTENCE_END_CHARS = '.!?:;';
+
+  function flattenMarkupTextToOneLine(text) {
+    return text
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/([.!?:;])(?=[A-Z\u201c"'(\u27e6])/g, '$1 ')
+      .replace(/[ \t]+/g, ' ')
+      .trim();
+  }
+
+  function splitFlattenedIntoSentences(text) {
+    const sentences = [];
+    let buf = '';
+    let depth = 0; // count of currently-unclosed ⟦B⟧/⟦I⟧/⟦U⟧/⟦L:url⟧ markers
+    let i = 0;
+    const n = text.length;
+    while (i < n) {
+      if (text[i] === '\u27e6') {
+        const close = text.indexOf('\u27e7', i);
+        if (close === -1) { buf += text[i]; i += 1; continue; }
+        const token = text.slice(i, close + 1);
+        if (token === '\u27e6B\u27e7' || token === '\u27e6I\u27e7' || token === '\u27e6U\u27e7' || token.slice(0, 3) === '\u27e6L:') depth += 1;
+        else if (token === '\u27e6/B\u27e7' || token === '\u27e6/I\u27e7' || token === '\u27e6/U\u27e7' || token === '\u27e6/L\u27e7') depth = Math.max(0, depth - 1);
+        buf += token;
+        i = close + 1;
+        continue;
+      }
+      buf += text[i];
+      if (depth === 0 && SENTENCE_END_CHARS.indexOf(text[i]) !== -1) {
+        const next = text[i + 1];
+        if (next === undefined || /\s/.test(next)) {
+          const trimmed = buf.trim();
+          if (trimmed) sentences.push(trimmed);
+          buf = '';
+        }
+      }
+      i += 1;
+    }
+    const rest = buf.trim();
+    if (rest) sentences.push(rest);
+    return sentences;
+  }
+
+  // Replaces this Hike's entire Pathways paragraph list with one
+  // sentence-per-paragraph split of its current text, and switches
+  // to Pathways to show the result. Destructive to the existing
+  // paragraph list, so it's confirmed the same way Delete Hike is.
+  function extractHikeToPathways() {
+    const hike = getActiveHike();
+    if (!hike) return;
+    if (mode === 'editor') commitEditorMode(); else commitPathwaysToHike();
+    const rawMarkup = segmentsToMarkupText(htmlToSegments(hike.html || ''));
+    if (!rawMarkup.trim()) { showHikesToast('Nothing to extract — this Hike is empty'); return; }
+    if (!window.confirm('This replaces this Hike\u2019s Pathways paragraphs with one sentence per paragraph, split from its current text. This can\u2019t be undone. Continue?')) return;
+
+    const flattened = flattenMarkupTextToOneLine(rawMarkup);
+    const sentences = splitFlattenedIntoSentences(flattened);
+    const pieces = sentences.length ? sentences : [flattened];
+    const blocks = pieces.map((s) => ({ id: uidH('para'), html: markupTextToHtml(s), expanded: true }));
+
+    hike.pathwaysBlocks = blocks;
+    hike.pathwaysDirty = false;
+    hike.html = joinBlocksToHtml(blocks);
+    setMode('pathways');
+    showHikesToast('Extracted ' + blocks.length + ' paragraph' + (blocks.length === 1 ? '' : 's') + ' to Pathways');
+  }
+
+  // ============================================================
   // Hikes state + sidebar
   // ============================================================
 
@@ -2619,6 +2713,8 @@
   const S = window.Summit.state.mountain;
 
   let mode = 'editor'; // 'editor' | 'pathways' — applies to whichever Hike is active
+  let groupingMode = false; // true while "Group Paragraphs" checkbox list is showing, in Pathways
+  let groupingSelectedIds = new Set();
 
   function uidH(prefix) { return prefix + '-' + Math.random().toString(36).slice(2, 10); }
 
@@ -2698,6 +2794,7 @@
   function selectHike(id) {
     S.activeHikeId = id;
     mode = 'editor';
+    resetGroupingUI();
     renderHikesList();
     renderActiveHike();
   }
@@ -2745,6 +2842,7 @@
   // ============================================================
 
   function setMode(next) {
+    if (groupingMode && next !== 'pathways') resetGroupingUI();
     mode = next;
     hikesModeEditorBtn.setAttribute('aria-selected', String(mode === 'editor'));
     hikesModePathwaysBtn.setAttribute('aria-selected', String(mode === 'pathways'));
@@ -2778,6 +2876,21 @@
   hikesLinkBtn.addEventListener('click', () => insertLinkInTextarea(hikesEditorBox));
   if (hikesExtractBtn) hikesExtractBtn.addEventListener('click', () => extractFromDocumentInto(hikesEditorBox));
   else console.error('Hikes: #hikes-extract-btn not found in the page — the Extract button won\u2019t work until index.html has it.');
+
+  // "Extract to Pathways" isn't in index.html (no id reserved for
+  // it), so it's built and inserted here rather than looked up —
+  // dropped right after Extract from Document in the same toolbar.
+  if (hikesExtractBtn && hikesExtractBtn.parentNode) {
+    const hikesExtractToPathwaysBtn = document.createElement('button');
+    hikesExtractToPathwaysBtn.type = 'button';
+    hikesExtractToPathwaysBtn.className = hikesExtractBtn.className;
+    hikesExtractToPathwaysBtn.textContent = 'Extract to Pathways';
+    hikesExtractToPathwaysBtn.title = 'Flatten this Hike\u2019s text and split it one sentence per Pathways paragraph';
+    hikesExtractToPathwaysBtn.addEventListener('click', extractHikeToPathways);
+    hikesExtractBtn.parentNode.insertBefore(hikesExtractToPathwaysBtn, hikesExtractBtn.nextSibling);
+  } else {
+    console.error('Hikes: #hikes-extract-btn\u2019s toolbar not found — the Extract to Pathways button couldn\u2019t be inserted.');
+  }
 
   // ============================================================
   // Pathways mode — the same Hike's text as separate, reorderable,
@@ -2837,7 +2950,8 @@
   function renderPathwaysMode() {
     const hike = getActiveHike();
     if (!hike) return;
-    renderPathwaysList(ensurePathwaysBlocks(hike));
+    const blocks = ensurePathwaysBlocks(hike);
+    if (groupingMode) renderGroupingList(blocks); else renderPathwaysList(blocks);
   }
 
   function renderPathwaysList(blocks) {
@@ -2845,6 +2959,100 @@
     blocks.forEach((block, idx) => {
       hikesPathwaysListEl.appendChild(renderParagraphBlock(block, idx, blocks.length));
     });
+  }
+
+  // ============================================================
+  // Group Paragraphs (2.9b) — a plain checkbox list over the
+  // current Hike's Pathways paragraphs (in place of the normal
+  // accordion) so several can be merged into one paragraph at once,
+  // instead of hand-copying text between boxes. Selection order
+  // doesn't matter — Save always merges checked paragraphs in their
+  // existing top-to-bottom order and drops the merged paragraph in
+  // at the position of the first one checked; unchecked paragraphs
+  // keep their place.
+  // ============================================================
+
+  function renderGroupingList(blocks) {
+    hikesPathwaysListEl.innerHTML = '';
+
+    const help = document.createElement('p');
+    help.className = 'hikes-paragraph__preview';
+    help.textContent = 'Check the paragraphs to merge into one, then Save Groups. They\u2019ll merge in top-to-bottom order, wherever the first checked one currently sits.';
+    hikesPathwaysListEl.appendChild(help);
+
+    blocks.forEach((block, idx) => {
+      const row = document.createElement('label');
+      row.className = 'hikes-paragraph hikes-paragraph--grouping-row';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = groupingSelectedIds.has(block.id);
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) groupingSelectedIds.add(block.id);
+        else groupingSelectedIds.delete(block.id);
+      });
+      row.appendChild(checkbox);
+
+      const text = document.createElement('span');
+      const previewText = plainTextFromMarkupText(segmentsToMarkupText(htmlToSegments(block.html))).replace(/\s+/g, ' ').trim();
+      text.textContent = (idx + 1) + '. ' + (previewText || 'Empty');
+      row.appendChild(text);
+
+      hikesPathwaysListEl.appendChild(row);
+    });
+  }
+
+  function resetGroupingUI() {
+    groupingMode = false;
+    groupingSelectedIds = new Set();
+    if (hikesGroupBtn) hikesGroupBtn.hidden = false;
+    if (hikesGroupSaveBtn) hikesGroupSaveBtn.hidden = true;
+    if (hikesGroupCancelBtn) hikesGroupCancelBtn.hidden = true;
+    if (hikesAddParagraphBtn) hikesAddParagraphBtn.hidden = false;
+    if (hikesImportParagraphBtn) hikesImportParagraphBtn.hidden = false;
+  }
+
+  function enterGroupingMode() {
+    const hike = getActiveHike();
+    if (!hike) return;
+    commitPathwaysToHike();
+    const blocks = ensurePathwaysBlocks(hike);
+    if (blocks.length < 2) { showHikesToast('Need at least 2 paragraphs to group'); return; }
+    groupingMode = true;
+    groupingSelectedIds = new Set();
+    if (hikesGroupBtn) hikesGroupBtn.hidden = true;
+    if (hikesGroupSaveBtn) hikesGroupSaveBtn.hidden = false;
+    if (hikesGroupCancelBtn) hikesGroupCancelBtn.hidden = false;
+    if (hikesAddParagraphBtn) hikesAddParagraphBtn.hidden = true;
+    if (hikesImportParagraphBtn) hikesImportParagraphBtn.hidden = true;
+    renderGroupingList(blocks);
+  }
+
+  function exitGroupingModeAndRender() {
+    const hike = getActiveHike();
+    resetGroupingUI();
+    if (hike && hike.pathwaysBlocks) renderPathwaysList(hike.pathwaysBlocks);
+  }
+
+  function saveGrouping() {
+    const hike = getActiveHike();
+    if (!hike || !hike.pathwaysBlocks) return;
+    if (groupingSelectedIds.size < 2) { showHikesToast('Select at least 2 paragraphs to group'); return; }
+    const blocks = hike.pathwaysBlocks;
+    const firstIdx = blocks.findIndex((b) => groupingSelectedIds.has(b.id));
+    const groupedHtml = blocks
+      .filter((b) => groupingSelectedIds.has(b.id))
+      .map((b) => (b.html || '').trim())
+      .filter(Boolean)
+      .join(' ');
+    const remaining = blocks.filter((b) => !groupingSelectedIds.has(b.id));
+    const insertAt = blocks.slice(0, firstIdx).filter((b) => !groupingSelectedIds.has(b.id)).length;
+    remaining.splice(insertAt, 0, { id: uidH('para'), html: groupedHtml, expanded: true });
+    hike.pathwaysBlocks = remaining;
+    hike.html = joinBlocksToHtml(remaining);
+    const mergedCount = groupingSelectedIds.size;
+    exitGroupingModeAndRender();
+    showHikesToast('Grouped ' + mergedCount + ' paragraphs into one');
   }
 
   function toggleParagraphExpanded(id) {
@@ -3198,6 +3406,32 @@
   importQueryInput.addEventListener('input', renderImportResults);
   importSubFilterSel.addEventListener('change', renderImportResults);
   hikesImportParagraphBtn.addEventListener('click', () => openImportModal(null));
+
+  // "Group Paragraphs" and its Save/Cancel pair aren't in index.html
+  // either, so — like Extract to Pathways above — they're built and
+  // inserted here rather than looked up, dropped right after Import
+  // from Template in the same toolbar.
+  let hikesGroupBtn = null, hikesGroupSaveBtn = null, hikesGroupCancelBtn = null;
+  if (hikesImportParagraphBtn && hikesImportParagraphBtn.parentNode) {
+    const mkToolbarBtn = (label, titleText, onClick, hidden) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = hikesImportParagraphBtn.className;
+      b.textContent = label;
+      b.title = titleText;
+      b.hidden = !!hidden;
+      b.addEventListener('click', onClick);
+      return b;
+    };
+    hikesGroupBtn = mkToolbarBtn('Group Paragraphs', 'Check several paragraphs and merge them into one', () => enterGroupingMode());
+    hikesGroupSaveBtn = mkToolbarBtn('Save Groups', 'Merge the checked paragraphs into one', () => saveGrouping(), true);
+    hikesGroupCancelBtn = mkToolbarBtn('Cancel', 'Exit without grouping anything', () => exitGroupingModeAndRender(), true);
+    hikesImportParagraphBtn.parentNode.insertBefore(hikesGroupBtn, hikesImportParagraphBtn.nextSibling);
+    hikesImportParagraphBtn.parentNode.insertBefore(hikesGroupSaveBtn, hikesGroupBtn.nextSibling);
+    hikesImportParagraphBtn.parentNode.insertBefore(hikesGroupCancelBtn, hikesGroupSaveBtn.nextSibling);
+  } else {
+    console.error('Hikes: #hikes-import-paragraph-btn\u2019s toolbar not found — the Group Paragraphs buttons couldn\u2019t be inserted.');
+  }
 
   // ============================================================
   // Paragraph preview (Pathways)
