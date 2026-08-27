@@ -1299,7 +1299,15 @@
       if (!el || el.nodeType !== 1 || (el.tagName !== 'P' && el.tagName !== 'DIV')) return false;
       const style = el.getAttribute('style') || '';
       const cls = el.getAttribute('class') || '';
-      return /mso-margin-(top|bottom)-alt/i.test(style) || /\bMsoNormal\b/i.test(cls);
+      // MsoNormal covers ordinary body text. Typed (not auto-numbered)
+      // list-style lines — "1. Log on to..." split across a table
+      // cell's width — get tagged by Word as MsoListParagraph, or one
+      // of its ...CxSpFirst/Middle/Last continuation variants, instead
+      // of MsoNormal. Without matching those too, each of their visual
+      // wraps gets kept as its own "deliberate" paragraph break by the
+      // preserveParagraphs branch below, splitting a single line
+      // mid-sentence (e.g. "1. Log" / "on to CPF homepage").
+      return /mso-margin-(top|bottom)-alt/i.test(style) || /\bMso(Normal|ListParagraph\w*)\b/i.test(cls);
     };
 
     function mergeRun(container) {
