@@ -2099,6 +2099,150 @@
   const NUMBER_PREFIX_RE = /^\d+\.\s/;
   const BULLET_PREFIX_RE = /^\u2022 /;
 
+  // ============================================================
+  // Rich paste into the marker-text kernel (2.6a)
+  //
+  // hikesEditorBox and each Pathways paragraph box are genuine
+  // <textarea> elements (see note above), so a native paste only
+  // ever gives them flat text — the browser throws away any HTML
+  // on the clipboard before it reaches a textarea. That's why
+  // bold/italic/underline/links/bullets copied from an outside
+  // page, doc, or email used to disappear entirely on paste here.
+  //
+  // This reads the clipboard's HTML ourselves, runs it through the
+  // same sanitizeHTML() used for Draft pastes, and converts the
+  // result into this editor's ⟦B⟧/⟦I⟧/⟦U⟧/⟦L:url⟧ marker text —
+  // including turning <ul>/<ol><li> into "• "/"N. " prefixed lines,
+  // matching the bullet/number convention toggleTextareaLinePrefix
+  // already uses. Bold/italic/underline are recognised both from
+  // tags (<b>/<i>/<u>/<strong>/<em>) and from inline styles (Word,
+  // Google Docs, and most rich text editors export bold as
+  // font-weight rather than a <b> tag).
+  // ============================================================
+
+  function pastedHtmlToMarkupText(html) {
+    const clean = sanitizeHTML(html);
+    const doc = new DOMParser().parseFromString('<div>' + clean + '</div>', 'text/html');
+    const root = doc.body.firstChild;
+
+    const lines = [[]];
+    const pushSeg = (seg) => { lines[lines.length - 1].push(seg); };
+    const newLine = () => { if (lines[lines.length - 1].length) lines.push([]); };
+
+    function styleFmt(el, fmt) {
+      let bold = fmt.bold, italic = fmt.italic, underline = fmt.underline;
+      const style = el.getAttribute && el.getAttribute('style');
+      if (style) {
+        const fw = /font-weight\s*:\s*([^;]+)/i.exec(style);
+        if (fw) {
+          const v = fw[1].trim().toLowerCase();
+          if (v === 'bold' || v === 'bolder' || (/^\d+$/.test(v) && parseInt(v, 10) >= 600)) bold = true;
+        }
+        if (/font-style\s*:\s*italic/i.test(style)) italic = true;
+        if (/text-decoration[^:]*:[^;]*underline/i.test(style)) underline = true;
+      }
+      return { bold, italic, underline };
+    }
+
+    function walkInline(node, fmt) {
+      Array.from(node.childNodes).forEach((child) => {
+        if (child.nodeType === 3) {
+          if (child.textContent) pushSeg(Object.assign({ type: 'text', value: child.textContent }, fmt));
+          return;
+        }
+        if (child.nodeType !== 1) return;
+        const tag = child.tagName;
+        if (tag === 'BR') { newLine(); return; }
+        if (tag === 'A') {
+          const f = styleFmt(child, fmt);
+          pushSeg(Object.assign({ type: 'link', text: child.textContent, url: child.getAttribute('href') || '' }, f));
+          return;
+        }
+        if (tag === 'UL' || tag === 'OL' || tag === 'LI' || tag === 'P' || tag === 'DIV') {
+          // A block landed inside inline flow (odd but seen from some
+          // editors) — give it its own line(s) rather than losing it.
+          newLine();
+          walkTopLevel(child);
+          newLine();
+          return;
+        }
+        const nextFmt = styleFmt(child, {
+          bold: fmt.bold || tag === 'B' || tag === 'STRONG',
+          italic: fmt.italic || tag === 'I' || tag === 'EM',
+          underline: fmt.underline || tag === 'U'
+        });
+        walkInline(child, nextFmt);
+      });
+    }
+
+    function walkList(listEl) {
+      let n = 0;
+      Array.from(listEl.children).forEach((li) => {
+        if (li.tagName !== 'LI') return;
+        n += 1;
+        newLine();
+        pushSeg({ type: 'text', value: listEl.tagName === 'UL' ? BULLET_PREFIX : (n + '. '), bold: false, italic: false, underline: false });
+        walkInline(li, NO_FORMAT);
+      });
+      newLine();
+    }
+
+    function walkTopLevel(node) {
+      Array.from(node.childNodes).forEach((child) => {
+        if (child.nodeType === 3) {
+          if (child.textContent) pushSeg({ type: 'text', value: child.textContent, bold: false, italic: false, underline: false });
+          return;
+        }
+        if (child.nodeType !== 1) return;
+        const tag = child.tagName;
+        if (tag === 'UL' || tag === 'OL') { walkList(child); return; }
+        if (tag === 'P' || tag === 'DIV') {
+          newLine();
+          walkInline(child, styleFmt(child, NO_FORMAT));
+          newLine();
+          return;
+        }
+        if (tag === 'BR') { newLine(); return; }
+        if (tag === 'A') {
+          const f = styleFmt(child, NO_FORMAT);
+          pushSeg(Object.assign({ type: 'link', text: child.textContent, url: child.getAttribute('href') || '' }, f));
+          return;
+        }
+        const nextFmt = styleFmt(child, {
+          bold: tag === 'B' || tag === 'STRONG',
+          italic: tag === 'I' || tag === 'EM',
+          underline: tag === 'U'
+        });
+        walkInline(child, nextFmt);
+      });
+    }
+
+    walkTopLevel(root);
+
+    while (lines.length > 1 && lines[0].length === 0) lines.shift();
+    while (lines.length > 1 && lines[lines.length - 1].length === 0) lines.pop();
+
+    return lines.map((segs) => segmentsToMarkupText(segs)).join('\n');
+  }
+
+  // Shared paste handler for hikesEditorBox and every Pathways
+  // paragraph textarea. Falls through to native paste when the
+  // clipboard has no HTML (plain-text-only copies work exactly as
+  // before), so this only changes behaviour for rich-text pastes.
+  function handleHikesTextareaPaste(e) {
+    const clipboardData = e.clipboardData || window.clipboardData;
+    if (!clipboardData) return;
+    const html = clipboardData.getData('text/html');
+    if (!html) return;
+    e.preventDefault();
+    const textarea = e.currentTarget;
+    const markupText = pastedHtmlToMarkupText(html);
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    textarea.setRangeText(markupText, start, end, 'end');
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
   // Wraps (or, with nothing selected, inserts a placeholder inside)
   // the current textarea selection in marker tags — plain
   // setRangeText-based string editing (same API Draft's expand
@@ -2328,6 +2472,7 @@
   }
 
   hikesEditorBox.addEventListener('input', commitEditorMode);
+  hikesEditorBox.addEventListener('paste', handleHikesTextareaPaste);
   hikesBoldBtn.addEventListener('click', () => wrapSelectionInTextarea(hikesEditorBox, '\u27e6B\u27e7', '\u27e6/B\u27e7', 'bold text'));
   hikesItalicBtn.addEventListener('click', () => wrapSelectionInTextarea(hikesEditorBox, '\u27e6I\u27e7', '\u27e6/I\u27e7', 'italic text'));
   hikesUnderlineBtn.addEventListener('click', () => wrapSelectionInTextarea(hikesEditorBox, '\u27e6U\u27e7', '\u27e6/U\u27e7', 'underlined text'));
@@ -2491,6 +2636,7 @@
     box.setAttribute('placeholder', 'Write this paragraph…');
     box.value = segmentsToMarkupText(htmlToSegments(block.html));
     box.addEventListener('input', () => { commitPathwaysToHike(); preview.textContent = (plainTextFromMarkupText(box.value).replace(/\s+/g, ' ').trim().slice(0, 80)) || 'Empty'; });
+    box.addEventListener('paste', handleHikesTextareaPaste);
 
     const mk = (label, titleText, onClick) => {
       const b = document.createElement('button');
