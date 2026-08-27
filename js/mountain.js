@@ -1780,6 +1780,7 @@
   window.Summit = window.Summit || { state: { mountain: {}, peaks: {}, draft: {} } };
   window.Summit.mountain = {
     getHTML: () => pages.map((p) => p.body.innerHTML).join(''),
+    sanitizeHTML: (html) => sanitizeHTML(html),
     getPlainText: () => pages.map((p) => p.body.textContent).join('\n\n'),
 
     // One HTML string per page, in order — used by batch export (4.3+)
@@ -2180,7 +2181,11 @@
   // ============================================================
 
   function pastedHtmlToMarkupText(html) {
-    return segmentsToMarkupText(htmlToSegments(sanitizeHTML(html)));
+    if (!window.Summit || !window.Summit.mountain || typeof window.Summit.mountain.sanitizeHTML !== 'function') {
+      throw new Error('sanitizeHTML unavailable — Document view has not initialized');
+    }
+    const cleanHtml = window.Summit.mountain.sanitizeHTML(html);
+    return segmentsToMarkupText(htmlToSegments(cleanHtml));
   }
 
   // Shared paste handler for hikesEditorBox and every Pathways
@@ -2233,14 +2238,10 @@
       textarea.focus();
       showHikesToast('Extracted from Document');
     } catch (err) {
-      // Put the actual error text directly in the box — easier to
-      // copy/paste back than digging through devtools.
-      const message = (err && (err.stack || err.message)) ? String(err.stack || err.message) : String(err);
-      const start = textarea.selectionStart || 0;
-      const end = textarea.selectionEnd || 0;
-      textarea.setRangeText('[Extract error — copy this line] ' + message, start, end, 'end');
-      textarea.dispatchEvent(new Event('input', { bubbles: true }));
-      showHikesToast('Extract failed — error text inserted into the box');
+      // Surface the failure instead of doing nothing silently — check
+      // the browser console (F12) for the full error if this shows up.
+      console.error('Extract from Document failed:', err);
+      showHikesToast('Extract failed — see browser console (F12) for details');
     }
   }
 
