@@ -3279,7 +3279,7 @@
     if (mode === 'pathways') {
       commitPathwaysToHike();
       const boxes = readParagraphBoxes();
-      plain = boxes.map((box) => plainTextFromMarkupText(box.value)).join('\n');
+      plain = boxes.map((box) => plainTextFromMarkupText(box.value)).join('\n\n');
       html = boxes.map((box) => htmlStringToClipboardHtml(markupTextToHtml(box.value))).join('<div><br></div>');
     } else {
       commitEditorMode();
