@@ -585,6 +585,9 @@
   // ============================================================
 
   tbody.addEventListener('mousedown', (e) => {
+    // Right-click (or middle-click) must never touch the selection —
+    // only the primary button selects / drags.
+    if (e.button !== 0) return;
     if (e.target.classList.contains('peaks-colhead__resize') || e.target.classList.contains('peaks-rowhead__resize')) return;
 
     const td = e.target.closest('td.peaks-cell');
@@ -1289,15 +1292,8 @@
     const r = Number(td.dataset.row), c = Number(td.dataset.col);
     contextCell = { r, c };
 
-    // Right-clicking outside the current selection collapses it to
-    // just that cell, same as Excel/Sheets. Right-clicking inside an
-    // existing multi-cell selection leaves it alone, so "Copy" /
-    // "Paste table" still act on the whole range.
-    const inSelection = selection && r >= selection.r1 && r <= selection.r2 && c >= selection.c1 && c <= selection.c2;
-    if (!inSelection) {
-      setSelection(r, c, r, c);
-      focusCellVisually(td);
-    }
+    // Right-clicking never changes the selection — whatever range(s)
+    // were dragged out stay selected so Copy / Paste act on them.
 
     showContextMenu(e.clientX, e.clientY);
   });

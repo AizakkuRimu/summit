@@ -217,17 +217,6 @@
     return savedAny;
   }
 
-  // Best-effort auto-download right before the tab/browser closes.
-  // Note (mirrors the spec): 'beforeunload'/'pagehide' downloads are
-  // NOT reliable across all browsers — many block or silently drop
-  // work triggered during unload. This is a safety net on top of the
-  // manual "Save & Exit" button below, not a substitute for it.
-  function attemptAutoDownload() {
-    try { saveAll('autosave'); } catch (err) { /* best effort only */ }
-  }
-  window.addEventListener('pagehide', attemptAutoDownload);
-  window.addEventListener('beforeunload', attemptAutoDownload);
-
   // Manual safety net (Section 4.2 note): reliably downloads whatever
   // has content, right now, on click.
   const saveExitBtn = document.getElementById('save-exit-btn');

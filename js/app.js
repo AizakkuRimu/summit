@@ -44,6 +44,9 @@
     tab.addEventListener('click', () => activateTab(tab.dataset.tab));
   });
 
+  // Open on Peaks by default.
+  activateTab('peaks');
+
   // ---------- Theme toggle ----------
   // Theme is a UI preference, not document content, so it's fine to
   // persist it across sessions — this is separate from the
