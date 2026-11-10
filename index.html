@@ -28,11 +28,11 @@
     </div>
 
     <nav class="summit-tabs" role="tablist" aria-label="Summit workspaces">
-      <button class="summit-tab" role="tab" data-tab="mountain" aria-selected="true" aria-controls="panel-mountain" id="tab-mountain">
+      <button class="summit-tab" role="tab" data-tab="mountain" aria-selected="false" aria-controls="panel-mountain" id="tab-mountain">
         <span class="summit-tab__peak" aria-hidden="true"></span>
         Mountain
       </button>
-      <button class="summit-tab" role="tab" data-tab="peaks" aria-selected="false" aria-controls="panel-peaks" id="tab-peaks">
+      <button class="summit-tab" role="tab" data-tab="peaks" aria-selected="true" aria-controls="panel-peaks" id="tab-peaks">
         <span class="summit-tab__peak" aria-hidden="true"></span>
         Peaks
       </button>
@@ -56,7 +56,7 @@
   </header>
 
   <main class="summit-main">
-    <section class="summit-panel" id="panel-mountain" role="tabpanel" aria-labelledby="tab-mountain">
+    <section class="summit-panel" id="panel-mountain" role="tabpanel" aria-labelledby="tab-mountain" hidden>
       <div class="mountain-shell" id="mountain-shell">
 
       <div class="draft-subnav" role="tablist" aria-label="Mountain views">
@@ -264,7 +264,7 @@
       </div>
     </section>
 
-    <section class="summit-panel" id="panel-peaks" role="tabpanel" aria-labelledby="tab-peaks" hidden>
+    <section class="summit-panel" id="panel-peaks" role="tabpanel" aria-labelledby="tab-peaks">
       <div class="peaks" id="peaks">
 
         <div class="summit-toolbar peaks-toolbar" role="toolbar" aria-label="Peaks formatting toolbar">
